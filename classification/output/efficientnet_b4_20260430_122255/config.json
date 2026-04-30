@@ -1,0 +1,21 @@
+{
+  "model": "efficientnet_b4",
+  "dropout": 0.5,
+  "data_dir": "C:\\Users\\natha\\OneDrive\\Documents\\Thesis Project\\FaceForensics",
+  "val_split": 0.15,
+  "num_workers": 4,
+  "epochs": 30,
+  "batch_size": 16,
+  "lr": 0.0002,
+  "weight_decay": 0.0001,
+  "patience": 7,
+  "min_lr": 1e-07,
+  "no_amp": false,
+  "output_dir": "output",
+  "resume": null,
+  "fine_tune": false,
+  "oversample_d3": true,
+  "device": "cuda",
+  "run": "efficientnet_b4_20260430_122255",
+  "use_amp": true
+}
