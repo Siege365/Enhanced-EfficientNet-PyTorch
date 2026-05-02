@@ -20,7 +20,12 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from network.models import model_selection
-from dataset.transform import efficientnet_default_data_transforms, efficientnet_enhanced_data_transforms
+from dataset.transform import (
+    efficientnet_default_data_transforms, 
+    efficientnet_enhanced_data_transforms,
+    mobilenet_default_data_transforms,
+    mobilenet_enhanced_data_transforms
+)
 from dataset.image_dataset import create_dataset
 
 
@@ -29,9 +34,9 @@ DEFAULT_DATA_DIR = r'C:\Users\natha\OneDrive\Documents\Thesis Project\FaceForens
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description='Train EfficientNet-B4 for AI Image Detection')
+    p = argparse.ArgumentParser(description='Train Deep Learning Models for AI Image Detection')
     p.add_argument('--model', type=str, default='efficientnet_b4',
-                   choices=['efficientnet_b4', 'efficientnet_b4_cbam'])
+                   choices=['mobilenet_v3', 'efficientnet_b4', 'efficientnet_b4_cbam', 'efficientnet_b4_spatial'])
     p.add_argument('--dropout', type=float, default=0.5)
     p.add_argument('--data_dir', type=str, default=DEFAULT_DATA_DIR)
     p.add_argument('--val_split', type=float, default=0.15)
@@ -47,8 +52,8 @@ def parse_args():
     p.add_argument('--resume', type=str, default=None)
     p.add_argument('--fine_tune', action='store_true', default=False,
                    help='Fine-tune from --resume checkpoint with lower LR')
-    p.add_argument('--oversample_d3', action='store_true', default=True,
-                   help='Oversample updated_data_3 (3x) to balance modern AI images')
+    p.add_argument('--subset_fraction', type=float, default=1.0,
+                   help='Fraction of the dataset to use for training (0.0 to 1.0)')
     return p.parse_args()
 
 
@@ -64,16 +69,19 @@ def build_datasets(args, transforms_dict):
         cfgs.append({'type': 'folder', 'path': d2})
     if os.path.exists(d3):
         cfgs.append({'type': 'folder', 'path': d3})
-        if args.oversample_d3:
-            cfgs.append({'type': 'folder', 'path': d3})
-            cfgs.append({'type': 'folder', 'path': d3})
-            print(f"  [OK] OpenFake data found (3x oversampled): {d3}")
-        else:
-            print(f"  [OK] OpenFake data found: {d3}")
+        print(f"  [OK] OpenFake data found: {d3}")
     if not cfgs:
         raise ValueError(f"No datasets found in {root}")
     ds = create_dataset(cfgs, split='train', transform=transforms_dict['train'])
     total = len(ds)
+
+    if args.subset_fraction < 1.0:
+        subset_sz = int(total * args.subset_fraction)
+        ignore_sz = total - subset_sz
+        ds, _ = random_split(ds, [subset_sz, ignore_sz], generator=torch.Generator().manual_seed(42))
+        total = len(ds)
+        print(f"  [!] Using subset: {total} images ({args.subset_fraction * 100:.1f}% of total data)")
+
     val_sz = int(total * args.val_split)
     train_sz = total - val_sz
     train_sub, val_sub = random_split(ds, [train_sz, val_sz],
@@ -167,9 +175,11 @@ def main():
     print(f"Output: {odir}\nModel: {args.model}\nAMP: {use_amp}")
 
     # Select transforms based on model
-    if args.model == 'efficientnet_b4':
+    if args.model == 'mobilenet_v3':
+        tf = mobilenet_default_data_transforms
+    elif args.model == 'efficientnet_b4':
         tf = efficientnet_default_data_transforms
-    elif args.model == 'efficientnet_b4_cbam':
+    elif args.model in ('efficientnet_b4_cbam', 'efficientnet_b4_spatial'):
         tf = efficientnet_enhanced_data_transforms
     else:
         tf = efficientnet_default_data_transforms

@@ -1,31 +1,43 @@
 """
-Model Selection Module - EfficientNet-B4 Variants
+Model Selection Module - Multi-Architecture Comparative Study
 
 Provides a unified interface for selecting between:
-  - 'efficientnet_b4':      Vanilla EfficientNet-B4 (baseline)
-  - 'efficientnet_b4_cbam': Enhanced EfficientNet-B4 with CBAM attention
+  - 'mobilenet_v3':            MobileNetV3-Small (lightweight baseline)
+  - 'efficientnet_b4':         Vanilla EfficientNet-B4 (proposed model)
+  - 'efficientnet_b4_cbam':    Enhanced EfficientNet-B4 with full CBAM attention
+  - 'efficientnet_b4_spatial': EfficientNet-B4 with spatial-only attention
 
 Author: Multi-Model Comparative Study Project
 """
 import torch
 import torch.nn as nn
-from network.efficientnet import VanillaEfficientNetB4, EnhancedEfficientNetB4
+from network.efficientnet import VanillaEfficientNetB4, EnhancedEfficientNetB4, SpatialOnlyEfficientNetB4
+from network.mobilenet import MobileNetV3Small
 
 
 class TransferModel(nn.Module):
     """
-    Transfer learning wrapper for EfficientNet-B4 binary classification.
+    Transfer learning wrapper for binary classification.
 
     Supports:
-        - 'efficientnet_b4': Vanilla EfficientNet-B4 (baseline)
-        - 'efficientnet_b4_cbam': EfficientNet-B4 + CBAM attention (enhanced)
+        - 'mobilenet_v3': MobileNetV3-Small (lightweight baseline)
+        - 'efficientnet_b4': Vanilla EfficientNet-B4 (proposed model)
+        - 'efficientnet_b4_cbam': EfficientNet-B4 + full CBAM attention
+        - 'efficientnet_b4_spatial': EfficientNet-B4 + spatial-only attention
     """
 
     def __init__(self, modelchoice, num_out_classes=2, dropout=0.0):
         super(TransferModel, self).__init__()
         self.modelchoice = modelchoice
 
-        if modelchoice == 'efficientnet_b4':
+        if modelchoice == 'mobilenet_v3':
+            self.model = MobileNetV3Small(
+                num_classes=num_out_classes,
+                dropout=dropout,
+                pretrained=True
+            )
+
+        elif modelchoice == 'efficientnet_b4':
             self.model = VanillaEfficientNetB4(
                 num_classes=num_out_classes,
                 dropout=dropout,
@@ -39,10 +51,17 @@ class TransferModel(nn.Module):
                 pretrained=True
             )
 
+        elif modelchoice == 'efficientnet_b4_spatial':
+            self.model = SpatialOnlyEfficientNetB4(
+                num_classes=num_out_classes,
+                dropout=dropout,
+                pretrained=True
+            )
+
         else:
             raise Exception(
                 f"Invalid model choice '{modelchoice}'. "
-                f"Choose from: efficientnet_b4, efficientnet_b4_cbam"
+                f"Choose from: mobilenet_v3, efficientnet_b4, efficientnet_b4_cbam, efficientnet_b4_spatial"
             )
 
     def set_trainable_up_to(self, boolean, layername=None):
@@ -83,14 +102,21 @@ def model_selection(modelname, num_out_classes, dropout=None):
     Factory function for model selection.
 
     Args:
-        modelname: 'efficientnet_b4' or 'efficientnet_b4_cbam'
+        modelname: 'mobilenet_v3', 'efficientnet_b4', 'efficientnet_b4_cbam', etc.
         num_out_classes: Number of output classes (2 for real/fake)
         dropout: Dropout probability (None or 0 for no dropout)
 
     Returns:
         tuple: (model, image_size, pretrained_flag, input_list, augmentation)
     """
-    if modelname == 'efficientnet_b4':
+    if modelname == 'mobilenet_v3':
+        return TransferModel(
+            modelchoice='mobilenet_v3',
+            num_out_classes=num_out_classes,
+            dropout=dropout or 0.0
+        ), 224, True, ['image'], None
+
+    elif modelname == 'efficientnet_b4':
         return TransferModel(
             modelchoice='efficientnet_b4',
             num_out_classes=num_out_classes,
@@ -104,10 +130,17 @@ def model_selection(modelname, num_out_classes, dropout=None):
             dropout=dropout or 0.0
         ), 380, True, ['image'], None
 
+    elif modelname == 'efficientnet_b4_spatial':
+        return TransferModel(
+            modelchoice='efficientnet_b4_spatial',
+            num_out_classes=num_out_classes,
+            dropout=dropout or 0.0
+        ), 380, True, ['image'], None
+
     else:
         raise NotImplementedError(
             f"Model '{modelname}' not implemented. "
-            f"Choose from: efficientnet_b4, efficientnet_b4_cbam"
+            f"Choose from: mobilenet_v3, efficientnet_b4, efficientnet_b4_cbam, efficientnet_b4_spatial"
         )
 
 

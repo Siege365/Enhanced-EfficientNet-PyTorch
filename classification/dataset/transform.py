@@ -1,9 +1,13 @@
 """
-Data Transforms - EfficientNet-B4 Augmentation Pipelines
+Data Transforms - Model Augmentation Pipelines
 
-Provides transform sets for EfficientNet-B4 (380x380 native resolution):
-  1. efficientnet_default_data_transforms: Vanilla transforms (baseline)
-  2. efficientnet_enhanced_data_transforms: Social media-hardened augmentations
+Provides transform sets for:
+  EfficientNet-B4 (380x380 native resolution):
+    1. efficientnet_default_data_transforms: Vanilla transforms (baseline)
+    2. efficientnet_enhanced_data_transforms: Social media-hardened augmentations
+  MobileNetV3 (224x224 native resolution):
+    3. mobilenet_default_data_transforms: Standard MobileNetV3 transforms
+    4. mobilenet_enhanced_data_transforms: Social media-hardened augmentations
 
 Author: Multi-Model Comparative Study Project
 """
@@ -121,5 +125,64 @@ efficientnet_enhanced_data_transforms = {
         transforms.Resize((380, 380)),
         transforms.ToTensor(),
         transforms.Normalize([0.5] * 3, [0.5] * 3)
+    ]),
+}
+
+
+# =============================================================================
+# MOBILENETV3 VANILLA TRANSFORMS (224x224, ImageNet normalization)
+# =============================================================================
+
+# ImageNet mean/std (required for torchvision pretrained models)
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
+
+mobilenet_default_data_transforms = {
+    'train': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.ToTensor(),
+        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)
+    ]),
+    'val': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)
+    ]),
+    'test': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)
+    ]),
+}
+
+
+# =============================================================================
+# MOBILENETV3 ENHANCED TRANSFORMS (Social Media-Hardened, 224x224)
+# =============================================================================
+
+mobilenet_enhanced_data_transforms = {
+    'train': transforms.Compose([
+        transforms.Resize((240, 240)),  # Slightly larger for random crop
+        transforms.RandomCrop(224),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomRotation(degrees=10),
+        transforms.RandomApply([JPEGCompression(quality_range=(30, 95))], p=0.5),
+        transforms.RandomApply([GaussianBlurPIL(sigma_range=(0.1, 2.0))], p=0.3),
+        transforms.RandomApply([RandomDownscaleUpscale(scale_range=(0.5, 1.0))], p=0.3),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
+        transforms.ToTensor(),
+        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+        transforms.RandomErasing(p=0.1, scale=(0.02, 0.1)),
+    ]),
+    'val': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)
+    ]),
+    'test': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)
     ]),
 }

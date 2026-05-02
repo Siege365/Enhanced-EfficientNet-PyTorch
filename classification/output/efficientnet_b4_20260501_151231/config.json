@@ -4,8 +4,8 @@
   "data_dir": "C:\\Users\\natha\\OneDrive\\Documents\\Thesis Project\\FaceForensics",
   "val_split": 0.15,
   "num_workers": 4,
-  "epochs": 30,
-  "batch_size": 16,
+  "epochs": 15,
+  "batch_size": 8,
   "lr": 0.0002,
   "weight_decay": 0.0001,
   "patience": 7,
@@ -14,8 +14,8 @@
   "output_dir": "output",
   "resume": null,
   "fine_tune": false,
-  "oversample_d3": true,
+  "subset_fraction": 0.5,
   "device": "cuda",
-  "run": "efficientnet_b4_20260430_122255",
+  "run": "efficientnet_b4_20260501_151231",
   "use_amp": true
 }

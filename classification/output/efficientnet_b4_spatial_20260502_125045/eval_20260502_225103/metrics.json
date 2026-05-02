@@ -1,0 +1,23 @@
+{
+  "model": "efficientnet_b4_spatial",
+  "weights": "output\\efficientnet_b4_spatial_20260502_125045\\best_model.pth",
+  "external_dataset": true,
+  "dataset_path": "C:\\Users\\natha\\OneDrive\\Documents\\Thesis Project\\FaceForensics\\updated_data_4",
+  "test_samples": 9999,
+  "accuracy": 0.724872,
+  "precision": 0.826661,
+  "recall": 0.724872,
+  "f1_score": 0.73085,
+  "auc_roc": 0.876185,
+  "confusion_matrix": [
+    [
+      3185,
+      148
+    ],
+    [
+      2603,
+      4063
+    ]
+  ],
+  "evaluated_at": "20260502_225103"
+}

@@ -123,5 +123,18 @@ tf_to_pytorch/pretrained_tensorflow
 !tf_to_pytorch/pretrained_tensorflow/download.sh
 examples/imagenet/run.sh
 
+# Thesis Project Specific
+# Ignore massive datasets
+updated_data_*/
+data/
+datasets/
 
+# Ignore Streamlit cache/config
+.streamlit/
 
+# Ignore massive model weights (already caught by *.pth but good to be explicit)
+*.pt
+*.ckpt
+
+# Ignore large evaluation logs (optional, uncomment if you want to ignore all outputs)
+# classification/output/

@@ -1,0 +1,23 @@
+{
+  "model": "efficientnet_b4_cbam",
+  "weights": "output/efficientnet_b4_cbam_20260501_235853/best_model.pth",
+  "external_dataset": true,
+  "dataset_path": "C:\\Users\\natha\\OneDrive\\Documents\\Thesis Project\\FaceForensics\\updated_data_4",
+  "test_samples": 9999,
+  "accuracy": 0.724172,
+  "precision": 0.832482,
+  "recall": 0.724172,
+  "f1_score": 0.729735,
+  "auc_roc": 0.891168,
+  "confusion_matrix": [
+    [
+      3227,
+      106
+    ],
+    [
+      2652,
+      4014
+    ]
+  ],
+  "evaluated_at": "20260502_124604"
+}

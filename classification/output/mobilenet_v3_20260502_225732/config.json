@@ -1,0 +1,21 @@
+{
+  "model": "mobilenet_v3",
+  "dropout": 0.5,
+  "data_dir": "C:\\Users\\natha\\OneDrive\\Documents\\Thesis Project\\FaceForensics",
+  "val_split": 0.15,
+  "num_workers": 4,
+  "epochs": 15,
+  "batch_size": 32,
+  "lr": 0.0002,
+  "weight_decay": 0.0001,
+  "patience": 7,
+  "min_lr": 1e-07,
+  "no_amp": false,
+  "output_dir": "output",
+  "resume": null,
+  "fine_tune": false,
+  "subset_fraction": 1.0,
+  "device": "cuda",
+  "run": "mobilenet_v3_20260502_225732",
+  "use_amp": true
+}
