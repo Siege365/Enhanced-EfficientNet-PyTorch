@@ -141,6 +141,8 @@ classification/output/
 classification/generate_extra_graphs.py
 classification/generate_thesis_diagrams.py
 classification/generate_thesis_graphs.py
-
+classification/output/thesis_final_graphs/enhancement_analysis.png
+classification/output/thesis_final_graphs/learning_curves.png
+classification/output/thesis_final_graphs/main_performance_comparison.png
 # Ignore large data files
 data.zip
