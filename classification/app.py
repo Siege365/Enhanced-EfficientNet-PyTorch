@@ -16,6 +16,8 @@ import torch.nn as nn
 from torch.cuda.amp import autocast
 from PIL import Image
 import numpy as np
+import requests
+from io import BytesIO
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from network.models import model_selection
@@ -35,99 +37,173 @@ st.set_page_config(
 # ─── Custom CSS ──────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
 
-    * { font-family: 'Inter', sans-serif !important; }
-
+    /* Animated Background */
     .stApp {
-        background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+        font-family: 'Outfit', sans-serif;
+        background: radial-gradient(circle at 15% 50%, rgba(76, 29, 149, 0.15), transparent 25%),
+                    radial-gradient(circle at 85% 30%, rgba(14, 165, 233, 0.15), transparent 25%);
+        background-color: #0f1117; /* Slate dark */
     }
 
-    /* Sidebar */
+    /* Sidebar Glassmorphism */
     [data-testid="stSidebar"] {
-        background: rgba(15, 12, 41, 0.95) !important;
-        border-right: 1px solid rgba(255,255,255,0.08);
+        background: rgba(15, 17, 23, 0.6) !important;
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-right: 1px solid rgba(255, 255, 255, 0.05);
     }
 
-    /* Hero title */
+    /* Hero Text */
     .hero-title {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(to right, #38bdf8, #818cf8, #c084fc);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        font-size: 2.4rem;
+        font-size: 3.5rem;
         font-weight: 800;
         text-align: center;
-        margin-bottom: 0;
+        letter-spacing: -1px;
+        margin-bottom: 0.5rem;
+        animation: fadeInDown 0.8s ease-out;
     }
+    
     .hero-subtitle {
-        color: rgba(255,255,255,0.5);
+        color: #94a3b8;
         text-align: center;
-        font-size: 0.95rem;
-        margin-top: -10px;
-        margin-bottom: 30px;
+        font-size: 1.1rem;
+        font-weight: 400;
+        margin-bottom: 2.5rem;
+        animation: fadeInUp 0.8s ease-out;
     }
 
-    /* Glass cards */
+    /* Glass Cards with Hover Glow */
     .glass-card {
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 16px;
-        padding: 24px;
-        backdrop-filter: blur(10px);
-        margin-bottom: 16px;
+        background: rgba(30, 41, 59, 0.4);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 20px;
+        padding: 30px;
+        backdrop-filter: blur(12px);
+        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        margin-bottom: 20px;
+    }
+    .glass-card:hover {
+        transform: translateY(-5px);
+        border-color: rgba(56, 189, 248, 0.3);
+        box-shadow: 0 10px 40px rgba(56, 189, 248, 0.1);
     }
 
     /* Result Cards */
     .result-real {
-        background: linear-gradient(135deg, rgba(46,204,113,0.15) 0%, rgba(46,204,113,0.05) 100%);
-        border: 1px solid rgba(46,204,113,0.4);
-        border-radius: 16px;
-        padding: 24px;
+        background: linear-gradient(145deg, rgba(16, 185, 129, 0.1), rgba(16, 185, 129, 0.02));
+        border: 1px solid rgba(16, 185, 129, 0.3);
+        border-radius: 20px;
+        padding: 30px;
         text-align: center;
+        box-shadow: 0 0 20px rgba(16, 185, 129, 0.1);
+        animation: scaleIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
     }
     .result-fake {
-        background: linear-gradient(135deg, rgba(231,76,60,0.15) 0%, rgba(231,76,60,0.05) 100%);
-        border: 1px solid rgba(231,76,60,0.4);
-        border-radius: 16px;
-        padding: 24px;
+        background: linear-gradient(145deg, rgba(239, 68, 68, 0.1), rgba(239, 68, 68, 0.02));
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        border-radius: 20px;
+        padding: 30px;
         text-align: center;
+        box-shadow: 0 0 20px rgba(239, 68, 68, 0.1);
+        animation: scaleIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
     }
     .result-label {
-        font-size: 1.8rem;
+        font-size: 2.2rem;
         font-weight: 800;
-        margin-bottom: 5px;
+        letter-spacing: 1px;
+        text-shadow: 0 2px 10px rgba(0,0,0,0.2);
     }
     .result-confidence {
         font-size: 1.1rem;
-        font-weight: 500;
-        opacity: 0.8;
+        color: #cbd5e1;
+        margin-top: 5px;
     }
 
-    /* Metric tiles */
+    /* Metric Tiles */
     .metric-row {
         display: flex;
-        gap: 12px;
-        margin-top: 16px;
+        gap: 15px;
+        margin-top: 20px;
     }
     .metric-tile {
         flex: 1;
-        background: rgba(255,255,255,0.04);
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 12px;
-        padding: 16px;
+        background: rgba(30, 41, 59, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 16px;
+        padding: 20px 10px;
         text-align: center;
+        transition: all 0.3s ease;
+    }
+    .metric-tile:hover {
+        background: rgba(30, 41, 59, 0.8);
+        border-color: rgba(255, 255, 255, 0.1);
+        transform: translateY(-2px);
     }
     .metric-value {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: #667eea;
+        font-size: 1.8rem;
+        font-weight: 800;
+        background: linear-gradient(to right, #e2e8f0, #94a3b8);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }
     .metric-name {
         font-size: 0.75rem;
-        color: rgba(255,255,255,0.5);
+        color: #64748b;
         text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-top: 4px;
+        letter-spacing: 1.5px;
+        margin-top: 8px;
+        font-weight: 600;
+    }
+
+    /* Animations */
+    @keyframes fadeInDown {
+        from { opacity: 0; transform: translateY(-20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes scaleIn {
+        from { opacity: 0; transform: scale(0.9); }
+        to { opacity: 1; transform: scale(1); }
+    }
+
+    /* File Uploader Customization */
+    [data-testid="stFileUploadDropzone"] {
+        background-color: rgba(30, 41, 59, 0.3) !important;
+        border: 2px dashed rgba(148, 163, 184, 0.3) !important;
+        border-radius: 20px !important;
+        transition: all 0.3s ease !important;
+    }
+    [data-testid="stFileUploadDropzone"]:hover {
+        border-color: #38bdf8 !important;
+        background-color: rgba(56, 189, 248, 0.05) !important;
+    }
+    
+    /* Tabs Customization */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 24px;
+        background-color: transparent;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: transparent;
+        border-radius: 8px 8px 0 0;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #38bdf8 !important;
+        border-bottom-color: #38bdf8 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -163,8 +239,8 @@ def auto_discover_models():
             # Only show the two main models (skip CBAM/Spatial)
             if model_name in ('mobilenet_v3', 'efficientnet_b4'):
                 display = {
-                    'mobilenet_v3': '🟥 MobileNetV3-Small (Baseline — 2.5M params)',
-                    'efficientnet_b4': '🟩 EfficientNet-B4 (Proposed — 19.3M params)',
+                    'mobilenet_v3': '🟥 MobileNetV3-Small',
+                    'efficientnet_b4': '🟩 EfficientNet-B4',
                 }.get(model_name, model_name)
                 found[display] = {
                     'model_name': model_name,
@@ -243,7 +319,7 @@ with st.sidebar:
 
 
 # ─── Main Content ────────────────────────────────────────────────────
-st.markdown('<h1 class="hero-title">🔍 AI Forensic Image Detector</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="hero-title"><span style="-webkit-text-fill-color: initial; -webkit-background-clip: initial; background: none;">🔍</span> AI Forensic Image Detector</h1>', unsafe_allow_html=True)
 st.markdown('<p class="hero-subtitle">Deep Learning Approach for Detecting AI-Generated Media on Social Media</p>',
             unsafe_allow_html=True)
 
@@ -257,13 +333,34 @@ tab_image, tab_batch, tab_about = st.tabs(["🖼️ Single Image", "📁 Batch A
 # ─── Tab 1: Single Image ─────────────────────────────────────────────
 with tab_image:
     uploaded = st.file_uploader(
-        "Upload an image to analyze",
+        "Upload an image from your computer",
         type=['jpg', 'jpeg', 'png', 'webp', 'bmp'],
         key='single_upload'
     )
+    
+    st.markdown("<div style='text-align: center; margin: 10px 0; color: #94a3b8; font-weight: 600;'>— OR —</div>", unsafe_allow_html=True)
+    
+    image_url = st.text_input(
+        "Paste an image URL from social media",
+        placeholder="https://example.com/image.jpg",
+        key='url_upload'
+    )
 
+    image = None
     if uploaded:
-        image = Image.open(uploaded).convert('RGB')
+        try:
+            image = Image.open(uploaded).convert('RGB')
+        except Exception:
+            st.error("Invalid image file.")
+    elif image_url:
+        try:
+            response = requests.get(image_url, timeout=5)
+            response.raise_for_status()
+            image = Image.open(BytesIO(response.content)).convert('RGB')
+        except Exception as e:
+            st.error("Could not load image from URL. Please ensure it is a direct link to an image file (.jpg, .png).")
+
+    if image:
         result = predict_image(model, device, image, transform)
 
         col_img, col_result = st.columns([1, 1])
@@ -317,24 +414,55 @@ with tab_image:
 # ─── Tab 2: Batch Analysis ───────────────────────────────────────────
 with tab_batch:
     uploaded_files = st.file_uploader(
-        "Upload multiple images for batch analysis",
+        "Upload multiple images from your computer",
         type=['jpg', 'jpeg', 'png', 'webp', 'bmp'],
         accept_multiple_files=True,
         key='batch_upload'
     )
 
+    st.markdown("<div style='text-align: center; margin: 10px 0; color: #94a3b8; font-weight: 600;'>— OR —</div>", unsafe_allow_html=True)
+
+    batch_urls_text = st.text_area(
+        "Paste multiple image URLs (one per line)",
+        placeholder="https://example.com/image1.jpg\nhttps://example.com/image2.png",
+        key='batch_url_upload',
+        height=100
+    )
+
+    images_to_process = []
+    
     if uploaded_files:
-        st.markdown(f"**Analyzing {len(uploaded_files)} images...**")
+        for f in uploaded_files:
+            try:
+                img = Image.open(f).convert('RGB')
+                images_to_process.append({'image': img, 'filename': f.name})
+            except Exception:
+                pass
+                
+    if batch_urls_text.strip():
+        urls = [url.strip() for url in batch_urls_text.split('\\n') if url.strip()]
+        for url in urls:
+            try:
+                response = requests.get(url, timeout=5)
+                response.raise_for_status()
+                img = Image.open(BytesIO(response.content)).convert('RGB')
+                filename = url.split('/')[-1]
+                if len(filename) > 20: filename = filename[:17] + "..."
+                images_to_process.append({'image': img, 'filename': filename})
+            except Exception:
+                st.warning(f"Could not load image from URL: {url}")
+
+    if images_to_process:
+        st.markdown(f"**Analyzing {len(images_to_process)} images...**")
         progress = st.progress(0)
 
         results = []
-        for i, f in enumerate(uploaded_files):
-            img = Image.open(f).convert('RGB')
-            res = predict_image(model, device, img, transform)
-            res['filename'] = f.name
-            res['image'] = img
+        for i, item in enumerate(images_to_process):
+            res = predict_image(model, device, item['image'], transform)
+            res['filename'] = item['filename']
+            res['image'] = item['image']
             results.append(res)
-            progress.progress((i + 1) / len(uploaded_files))
+            progress.progress((i + 1) / len(images_to_process))
 
         # Summary stats
         real_count = sum(1 for r in results if r['prediction'] == 'REAL')
