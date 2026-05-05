@@ -9,7 +9,7 @@ Usage:
 
 Author: Multi-Model Comparative Study Project
 """
-import os, sys, time, tempfile, glob
+import os, sys, time, tempfile, glob, base64
 import streamlit as st
 import torch
 import torch.nn as nn
@@ -18,6 +18,13 @@ from PIL import Image
 import numpy as np
 import requests
 from io import BytesIO
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image
+from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
+from google import genai
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from network.models import model_selection
@@ -205,6 +212,93 @@ st.markdown("""
         color: #38bdf8 !important;
         border-bottom-color: #38bdf8 !important;
     }
+
+    /* Input Mode Toggle Slider */
+    div[data-testid="stHorizontalBlock"] > div {
+        padding: 0 !important;
+    }
+    .input-toggle-container {
+        display: flex;
+        background: rgba(30, 41, 59, 0.6);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 12px;
+        padding: 4px;
+        margin-bottom: 20px;
+        width: fit-content;
+    }
+    .stRadio > div {
+        display: flex;
+        flex-direction: row;
+        gap: 0;
+        background: rgba(30, 41, 59, 0.6);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 12px;
+        padding: 4px;
+        width: fit-content;
+    }
+    .stRadio > div > label {
+        padding: 8px 22px !important;
+        border-radius: 9px !important;
+        cursor: pointer !important;
+        font-weight: 600 !important;
+        font-size: 0.9rem !important;
+        color: #94a3b8 !important;
+        transition: all 0.25s ease !important;
+        margin: 0 !important;
+    }
+    .stRadio > div > label:has(input:checked) {
+        background: linear-gradient(135deg, #38bdf8, #818cf8) !important;
+        color: white !important;
+        box-shadow: 0 2px 10px rgba(56, 189, 248, 0.3) !important;
+    }
+    .stRadio > div > label > div:first-child {
+        display: none !important;
+    }
+
+    /* Fixed Image Preview */
+    [data-testid="stImage"] img {
+        width: 100% !important;
+        max-height: 420px !important;
+        object-fit: contain !important;
+        border-radius: 16px !important;
+        border: 1px solid rgba(255,255,255,0.08) !important;
+        background: rgba(15, 17, 23, 0.6) !important;
+    }
+
+    /* Explanation Card */
+    .xai-card {
+        background: rgba(30, 41, 59, 0.5);
+        border: 1px solid rgba(129, 140, 248, 0.3);
+        border-radius: 20px;
+        padding: 24px 28px;
+        margin-top: 20px;
+        animation: fadeInUp 0.6s ease-out;
+    }
+    .xai-card h4 {
+        background: linear-gradient(to right, #818cf8, #c084fc);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 12px;
+        font-size: 1.2rem;
+    }
+    .xai-card p {
+        color: #cbd5e1;
+        line-height: 1.7;
+        font-size: 0.95rem;
+    }
+    .xai-badge {
+        display: inline-block;
+        background: rgba(129, 140, 248, 0.15);
+        border: 1px solid rgba(129, 140, 248, 0.3);
+        border-radius: 8px;
+        padding: 4px 12px;
+        font-size: 0.75rem;
+        color: #818cf8;
+        font-weight: 600;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        margin-bottom: 12px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -256,6 +350,82 @@ def get_transform(model_name):
         return mobilenet_default_data_transforms['test']
     else:
         return efficientnet_default_data_transforms['test']
+
+
+def generate_gradcam(model, device, image_pil, transform, model_name, pred_class_idx):
+    """Generate a Grad-CAM heatmap overlay for a given prediction."""
+    try:
+        inner_model = model.model
+        backbone = inner_model.backbone
+
+        if model_name == 'mobilenet_v3':
+            target_layer = [backbone.features[-1]]
+        else:  # efficientnet_b4
+            target_layer = [backbone._conv_head]
+
+        cam = GradCAM(model=model, target_layers=target_layer)
+
+        img_tensor = transform(image_pil).unsqueeze(0).to(device)
+        targets = [ClassifierOutputTarget(pred_class_idx)]
+        grayscale_cam = cam(input_tensor=img_tensor, targets=targets)[0]
+
+        # Resize original image to match tensor size for overlay
+        img_resized = image_pil.resize((img_tensor.shape[3], img_tensor.shape[2]))
+        rgb_img = np.array(img_resized).astype(np.float32) / 255.0
+
+        cam_image = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True)
+        return Image.fromarray(cam_image)
+    except Exception as e:
+        st.warning(f"Grad-CAM generation failed: {e}")
+        return None
+
+
+def generate_gemini_explanation(image_pil, prediction, confidence, model_name):
+    """Use Gemini API to generate a text explanation of the prediction."""
+    # Try getting from OS env first, fallback to Streamlit secrets
+    api_key = os.environ.get('GEMINI_API_KEY', '')
+    if not api_key:
+        try:
+            api_key = st.secrets["GEMINI_API_KEY"]
+        except Exception:
+            pass
+            
+    if not api_key:
+        return None
+
+    try:
+        client = genai.Client(api_key=api_key)
+
+        # Convert PIL to bytes for the API
+        buf = BytesIO()
+        image_pil.save(buf, format='JPEG', quality=85)
+        img_bytes = buf.getvalue()
+
+        prompt = f"""You are a forensic AI image analyst. A deep learning model ({model_name}) has analyzed this image and classified it as **{prediction}** with **{confidence:.1%} confidence**.
+
+Provide a concise, professional explanation (3-4 sentences) of:
+1. What visual cues in this image support the model's classification.
+2. Specific regions or artifacts that suggest it is {prediction.lower()}.
+3. A brief comment on whether this classification seems reliable.
+
+Be specific about what you observe in this particular image. Do not use bullet points — write in flowing paragraph form."""
+
+        response = client.models.generate_content(
+            model='gemini-3-flash-preview',
+            contents=[
+                genai.types.Part.from_bytes(data=img_bytes, mime_type='image/jpeg'),
+                prompt
+            ]
+        )
+        return response.text
+    except Exception as e:
+        err = str(e).lower()
+        if '429' in err or 'quota' in err or 'exhausted' in err:
+            return f"ERROR: The free API rate limit has been reached. Raw error: {str(e)}"
+        elif 'connection' in err or 'timeout' in err:
+            return f"ERROR: Network connection failed. Raw error: {str(e)}"
+        else:
+            return f"ERROR: The AI failed to generate an explanation. Raw error: {str(e)}"
 
 
 def predict_image(model, device, image_pil, transform):
@@ -332,125 +502,183 @@ tab_image, tab_batch, tab_about = st.tabs(["🖼️ Single Image", "📁 Batch A
 
 # ─── Tab 1: Single Image ─────────────────────────────────────────────
 with tab_image:
-    uploaded = st.file_uploader(
-        "Upload an image from your computer",
-        type=['jpg', 'jpeg', 'png', 'webp', 'bmp'],
-        key='single_upload'
-    )
-    
-    st.markdown("<div style='text-align: center; margin: 10px 0; color: #94a3b8; font-weight: 600;'>— OR —</div>", unsafe_allow_html=True)
-    
-    image_url = st.text_input(
-        "Paste an image URL from social media",
-        placeholder="https://example.com/image.jpg",
-        key='url_upload'
+    input_mode = st.radio(
+        "Input Mode",
+        ["📁  Upload File", "🔗  Paste URL"],
+        horizontal=True,
+        key='single_mode',
+        label_visibility='collapsed'
     )
 
     image = None
-    if uploaded:
-        try:
-            image = Image.open(uploaded).convert('RGB')
-        except Exception:
-            st.error("Invalid image file.")
-    elif image_url:
-        try:
-            response = requests.get(image_url, timeout=5)
-            response.raise_for_status()
-            image = Image.open(BytesIO(response.content)).convert('RGB')
-        except Exception as e:
-            st.error("Could not load image from URL. Please ensure it is a direct link to an image file (.jpg, .png).")
+    if input_mode == "📁  Upload File":
+        uploaded = st.file_uploader(
+            "Upload an image from your computer",
+            type=['jpg', 'jpeg', 'png', 'webp', 'bmp'],
+            key='single_upload'
+        )
+        if uploaded:
+            try:
+                image = Image.open(uploaded).convert('RGB')
+            except Exception:
+                st.error("Invalid image file.")
+    else:
+        image_url = st.text_input(
+            "Paste a direct image URL from social media",
+            placeholder="https://example.com/image.jpg",
+            key='url_upload'
+        )
+        if image_url:
+            try:
+                response = requests.get(image_url, timeout=5)
+                response.raise_for_status()
+                image = Image.open(BytesIO(response.content)).convert('RGB')
+            except Exception:
+                st.error("Could not load image from URL. Please ensure it is a direct link to an image file (.jpg, .png).")
 
     if image:
         result = predict_image(model, device, image, transform)
 
-        col_img, col_result = st.columns([1, 1])
+        col_img, col_cam = st.columns([1, 1])
 
         with col_img:
-            st.image(image, caption="Uploaded Image", width='stretch')
+            st.image(image, caption="Original Image", use_container_width=True)
 
-        with col_result:
-            if result['prediction'] == 'REAL':
-                st.markdown(f"""
-                <div class="result-real">
-                    <div class="result-label" style="color: #2ECC71;">✅ AUTHENTIC</div>
-                    <div class="result-confidence" style="color: rgba(255,255,255,0.7);">
-                        Confidence: {result['confidence']:.1%}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+        with col_cam:
+            pred_idx = 1 if result['prediction'] != 'REAL' else 0
+            with st.spinner("Generating Grad-CAM heatmap..."):
+                heatmap = generate_gradcam(model, device, image, transform, selected['model_name'], pred_idx)
+            if heatmap:
+                st.image(heatmap, caption="Grad-CAM Activation Heatmap", use_container_width=True)
             else:
-                st.markdown(f"""
-                <div class="result-fake">
-                    <div class="result-label" style="color: #E74C3C;">⚠️ AI-GENERATED</div>
-                    <div class="result-confidence" style="color: rgba(255,255,255,0.7);">
-                        Confidence: {result['confidence']:.1%}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                st.info("Heatmap could not be generated.")
 
+        # Result card
+        if result['prediction'] == 'REAL':
             st.markdown(f"""
-            <div class="metric-row">
-                <div class="metric-tile">
-                    <div class="metric-value">{result['real_prob']:.1%}</div>
-                    <div class="metric-name">Real Probability</div>
+            <div class="result-real">
+                <div class="result-label" style="color: #2ECC71;">✅ AUTHENTIC</div>
+                <div class="result-confidence" style="color: rgba(255,255,255,0.7);">
+                    Confidence: {result['confidence']:.1%}
                 </div>
-                <div class="metric-tile">
-                    <div class="metric-value">{result['fake_prob']:.1%}</div>
-                    <div class="metric-name">Fake Probability</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-value">{result['inference_ms']:.0f}ms</div>
-                    <div class="metric-name">Inference Time</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="result-fake">
+                <div class="result-label" style="color: #E74C3C;">⚠️ AI-GENERATED</div>
+                <div class="result-confidence" style="color: rgba(255,255,255,0.7);">
+                    Confidence: {result['confidence']:.1%}
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
-            # Progress bars
-            st.markdown("#### Probability Distribution")
-            st.progress(result['real_prob'], text=f"Real: {result['real_prob']:.2%}")
-            st.progress(result['fake_prob'], text=f"AI-Generated: {result['fake_prob']:.2%}")
+        st.markdown(f"""
+        <div class="metric-row">
+            <div class="metric-tile">
+                <div class="metric-value">{result['real_prob']:.1%}</div>
+                <div class="metric-name">Real Probability</div>
+            </div>
+            <div class="metric-tile">
+                <div class="metric-value">{result['fake_prob']:.1%}</div>
+                <div class="metric-name">Fake Probability</div>
+            </div>
+            <div class="metric-tile">
+                <div class="metric-value">{result['inference_ms']:.0f}ms</div>
+                <div class="metric-name">Inference Time</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Progress bars
+        st.markdown("#### Probability Distribution")
+        st.progress(result['real_prob'], text=f"Real: {result['real_prob']:.2%}")
+        st.progress(result['fake_prob'], text=f"AI-Generated: {result['fake_prob']:.2%}")
+
+        # Check if API key is available
+        has_api_key = bool(os.environ.get('GEMINI_API_KEY'))
+        if not has_api_key:
+            try:
+                has_api_key = bool(st.secrets.get("GEMINI_API_KEY"))
+            except Exception:
+                pass
+
+        # Gemini text explanation
+        if has_api_key:
+            with st.spinner("🧠 Generating AI explanation..."):
+                explanation = generate_gemini_explanation(
+                    image, result['prediction'], result['confidence'], selected['model_name']
+                )
+            if explanation:
+                if explanation.startswith("ERROR:"):
+                    st.markdown(f"""
+                    <div class="xai-card" style="border-color: rgba(239, 68, 68, 0.3);">
+                        <span class="xai-badge" style="color: #ef4444; border-color: rgba(239, 68, 68, 0.3); background: rgba(239, 68, 68, 0.1);">⚠️ API Error</span>
+                        <p style="color: #cbd5e1;">{explanation.replace('ERROR: ', '')}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div class="xai-card">
+                        <span class="xai-badge">🧠 Explainable AI</span>
+                        <h4>Why does the model think this is {result['prediction']}?</h4>
+                        <p>{explanation}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="xai-card" style="border-color: rgba(148, 163, 184, 0.2);">
+                <span class="xai-badge" style="color: #94a3b8; border-color: rgba(148,163,184,0.3); background: rgba(148,163,184,0.1);">🔒 Text Explanation Locked</span>
+                <p style="color: #64748b; font-size: 0.85rem;">Set your <code>GEMINI_API_KEY</code> environment variable to enable AI-powered text explanations. The Grad-CAM heatmap above still shows where the model is looking.</p>
+            </div>
+            """, unsafe_allow_html=True)
 
 
 # ─── Tab 2: Batch Analysis ───────────────────────────────────────────
 with tab_batch:
-    uploaded_files = st.file_uploader(
-        "Upload multiple images from your computer",
-        type=['jpg', 'jpeg', 'png', 'webp', 'bmp'],
-        accept_multiple_files=True,
-        key='batch_upload'
-    )
-
-    st.markdown("<div style='text-align: center; margin: 10px 0; color: #94a3b8; font-weight: 600;'>— OR —</div>", unsafe_allow_html=True)
-
-    batch_urls_text = st.text_area(
-        "Paste multiple image URLs (one per line)",
-        placeholder="https://example.com/image1.jpg\nhttps://example.com/image2.png",
-        key='batch_url_upload',
-        height=100
+    batch_mode = st.radio(
+        "Batch Input Mode",
+        ["📁  Upload Files", "🔗  Paste URLs"],
+        horizontal=True,
+        key='batch_mode',
+        label_visibility='collapsed'
     )
 
     images_to_process = []
-    
-    if uploaded_files:
-        for f in uploaded_files:
-            try:
-                img = Image.open(f).convert('RGB')
-                images_to_process.append({'image': img, 'filename': f.name})
-            except Exception:
-                pass
-                
-    if batch_urls_text.strip():
-        urls = [url.strip() for url in batch_urls_text.split('\\n') if url.strip()]
-        for url in urls:
-            try:
-                response = requests.get(url, timeout=5)
-                response.raise_for_status()
-                img = Image.open(BytesIO(response.content)).convert('RGB')
-                filename = url.split('/')[-1]
-                if len(filename) > 20: filename = filename[:17] + "..."
-                images_to_process.append({'image': img, 'filename': filename})
-            except Exception:
-                st.warning(f"Could not load image from URL: {url}")
+
+    if batch_mode == "📁  Upload Files":
+        uploaded_files = st.file_uploader(
+            "Upload multiple images from your computer",
+            type=['jpg', 'jpeg', 'png', 'webp', 'bmp'],
+            accept_multiple_files=True,
+            key='batch_upload'
+        )
+        if uploaded_files:
+            for f in uploaded_files:
+                try:
+                    img = Image.open(f).convert('RGB')
+                    images_to_process.append({'image': img, 'filename': f.name})
+                except Exception:
+                    pass
+    else:
+        batch_urls_text = st.text_area(
+            "Paste multiple image URLs (one per line)",
+            placeholder="https://example.com/image1.jpg\nhttps://example.com/image2.png",
+            key='batch_url_upload',
+            height=120
+        )
+        if batch_urls_text.strip():
+            urls = [url.strip() for url in batch_urls_text.split('\n') if url.strip()]
+            for url in urls:
+                try:
+                    response = requests.get(url, timeout=5)
+                    response.raise_for_status()
+                    img = Image.open(BytesIO(response.content)).convert('RGB')
+                    filename = url.split('/')[-1]
+                    if len(filename) > 20: filename = filename[:17] + "..."
+                    images_to_process.append({'image': img, 'filename': filename})
+                except Exception:
+                    st.warning(f"Could not load: {url}")
 
     if images_to_process:
         st.markdown(f"**Analyzing {len(images_to_process)} images...**")

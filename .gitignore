@@ -141,6 +141,6 @@ classification/output/
 classification/generate_extra_graphs.py
 classification/generate_thesis_diagrams.py
 classification/generate_thesis_graphs.py
-
+classification/.streamlit/
 # Ignore large data files
 data.zip
