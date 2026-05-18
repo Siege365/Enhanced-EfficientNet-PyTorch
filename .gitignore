@@ -142,5 +142,9 @@ classification/generate_extra_graphs.py
 classification/generate_thesis_diagrams.py
 classification/generate_thesis_graphs.py
 classification/.streamlit/
+thesis_experiment/
+conceptual_framework_v2.html
+conceptual_framework_revised.html
+thesis_gantt_chart.html
 # Ignore large data files
 data.zip
