@@ -9,3 +9,4 @@ numpy
 matplotlib
 requests
 gdown
+opencv-python-headless
