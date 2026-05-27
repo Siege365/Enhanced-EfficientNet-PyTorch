@@ -1,6 +1,7 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 streamlit>=1.35.0
-torch>=2.0.0 --index-url https://download.pytorch.org/whl/cpu
-torchvision>=0.15.0 --index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
 efficientnet_pytorch
 grad-cam
 google-genai
