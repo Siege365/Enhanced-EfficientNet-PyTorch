@@ -316,6 +316,30 @@ def load_model(model_name, weights_path, dropout=0.5):
     return model, device
 
 
+@st.cache_resource
+def download_models_if_missing():
+    """Download models from Google Drive if they don't exist locally."""
+    import gdown
+    
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
+    
+    eff_dir = os.path.join(output_dir, 'efficientnet_b4_20260501_151231')
+    eff_path = os.path.join(eff_dir, 'best_model.pth')
+    
+    mob_dir = os.path.join(output_dir, 'mobilenet_v3_20260502_225732')
+    mob_path = os.path.join(mob_dir, 'best_model.pth')
+    
+    if not os.path.exists(eff_path) or not os.path.exists(mob_path):
+        with st.spinner("Downloading trained models from Google Drive... (This will take a minute on first run)"):
+            if not os.path.exists(eff_path):
+                os.makedirs(eff_dir, exist_ok=True)
+                gdown.download(id='1DwntuLSC87hxWgE-YiiM1JNWSxv8GZAd', output=eff_path, quiet=False)
+                
+            if not os.path.exists(mob_path):
+                os.makedirs(mob_dir, exist_ok=True)
+                gdown.download(id='1GvslUCjIAiqEeH5OmeEUo7kazNMYkkCF', output=mob_path, quiet=False)
+
+
 def auto_discover_models():
     """Scan the output directory for trained model checkpoints."""
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
@@ -462,6 +486,7 @@ with st.sidebar:
     st.markdown("## 🔧 Configuration")
     st.markdown("---")
 
+    download_models_if_missing()
     models = auto_discover_models()
 
     if not models:

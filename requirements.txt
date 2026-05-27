@@ -8,3 +8,4 @@ Pillow
 numpy
 matplotlib
 requests
+gdown
