@@ -1,269 +1,268 @@
-# EfficientNet PyTorch
+# Enhanced EfficientNet-B4 for AI-Generated Media Detection
 
-### Quickstart
+> **Thesis Research Project** — Detection of AI-generated images and videos on social media using a spatiotemporal deep learning framework with Explainable AI.
+>
+> **Authors:** Merka, Nathaniel Keene M. · Mallari, Neil Ian R. · Sevellino, Kent Lenoel C.
+> **Adviser:** Ramcis N. Vilchez, DIT
 
-Install with `pip install efficientnet_pytorch` and load a pretrained EfficientNet with:
-```python
-from efficientnet_pytorch import EfficientNet
-model = EfficientNet.from_pretrained('efficientnet-b0')
+---
+
+## Overview
+
+This repository extends the [EfficientNet-PyTorch](https://github.com/lukemelas/EfficientNet-PyTorch) library for a thesis research project on detecting AI-generated media. The project compares two model configurations:
+
+| Model | Description |
+|---|---|
+| **Baseline** | Frozen EfficientNet-B4 backbone with a trainable classification head (image-level, no temporal modeling) |
+| **Proposed** | EfficientNet-B4 + Temporal Shift Module (TSM) + Multi-Head Self-Attention (MHSA) — a unified spatiotemporal framework for both images and videos |
+
+The goal is to classify media as **Real** or **AI-Generated**, and to explain predictions using Grad-CAM heatmaps, attention weights, and Gemini LLM-generated text explanations.
+
+---
+
+## Table of Contents
+1. [Project Structure](#project-structure)
+2. [Models](#models)
+   - [Baseline: Image-Only EfficientNet-B4](#baseline-image-only-efficientnet-b4)
+   - [Proposed: Enhanced Spatiotemporal Model](#proposed-enhanced-spatiotemporal-model)
+   - [Ablation Configurations](#ablation-configurations)
+3. [Dataset](#dataset)
+4. [Training](#training)
+5. [Evaluation Metrics](#evaluation-metrics)
+6. [Installation](#installation)
+7. [References](#references)
+
+---
+
+## Project Structure
+
+```
+EfficientNet-PyTorch/
+├── efficientnet_pytorch/        # Base EfficientNet library (lukemelas)
+├── thesis_experiment/
+│   ├── models.py                # Baseline + Proposed model definitions
+│   ├── train.py                 # Training script (all 4 ablation configs)
+│   ├── dataset.py               # Video frame dataset loader
+│   ├── data/                    # Primary dataset (real/ and fake/ splits)
+│   ├── data_v2/                 # Secondary dataset version
+│   └── output/                  # Saved checkpoints per config
+└── README.md                    # This file
 ```
 
-### Updates
+---
 
-#### Update (April 2, 2021)
+## Models
 
-The [EfficientNetV2 paper](https://arxiv.org/abs/2104.00298) has been released! I am working on implementing it as you read this :) 
+### Baseline: Image-Only EfficientNet-B4
 
-About EfficientNetV2:
-> EfficientNetV2 is a new family of convolutional networks that have faster training speed and better parameter efficiency than previous models. To develop this family of models, we use a combination of training-aware neural architecture search and scaling, to jointly optimize training speed and parameter efficiency. The models were searched from the search space enriched with new ops such as Fused-MBConv. 
+The baseline treats every media file as a **static image**. For video inputs, frames are evaluated independently with no cross-frame information exchange.
 
-Here is a comparison: 
-> <img src="https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnetv2-image.png" width="100%" />
-
-
-#### Update (Aug 25, 2020)
-
-This update adds: 
- * A new `include_top` (default: `True`) option ([#208](https://github.com/lukemelas/EfficientNet-PyTorch/pull/208))
- * Continuous testing with [sotabench](https://sotabench.com/)
- * Code quality improvements and fixes ([#215](https://github.com/lukemelas/EfficientNet-PyTorch/pull/215) [#223](https://github.com/lukemelas/EfficientNet-PyTorch/pull/223))
-
-#### Update (May 14, 2020)
-
-This update adds comprehensive comments and documentation (thanks to @workingcoder).
-
-#### Update (January 23, 2020)
-
-This update adds a new category of pre-trained model based on adversarial training, called _advprop_. It is important to note that the preprocessing required for the advprop pretrained models is slightly different from normal ImageNet preprocessing. As a result, by default, advprop models are not used. To load a model with advprop, use:
-```python
-model = EfficientNet.from_pretrained("efficientnet-b0", advprop=True)
+**Architecture:**
 ```
-There is also a new, large `efficientnet-b8` pretrained model that is only available in advprop form. When using these models, replace ImageNet preprocessing code as follows:
-```python
-if advprop:  # for models using advprop pretrained weights
-    normalize = transforms.Lambda(lambda img: img * 2.0 - 1.0)
-else:
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-```
-This update also addresses multiple other issues ([#115](https://github.com/lukemelas/EfficientNet-PyTorch/issues/115), [#128](https://github.com/lukemelas/EfficientNet-PyTorch/issues/128)).
-
-#### Update (October 15, 2019)
-
-This update allows you to choose whether to use a memory-efficient Swish activation. The memory-efficient version is chosen by default, but it cannot be used when exporting using PyTorch JIT. For this purpose, we have also included a standard (export-friendly) swish activation function. To switch to the export-friendly version, simply call `model.set_swish(memory_efficient=False)` after loading your desired model. This update addresses issues [#88](https://github.com/lukemelas/EfficientNet-PyTorch/pull/88) and [#89](https://github.com/lukemelas/EfficientNet-PyTorch/pull/89).
-
-#### Update (October 12, 2019)
-
-This update makes the Swish activation function more memory-efficient. It also addresses pull requests [#72](https://github.com/lukemelas/EfficientNet-PyTorch/pull/72), [#73](https://github.com/lukemelas/EfficientNet-PyTorch/pull/73), [#85](https://github.com/lukemelas/EfficientNet-PyTorch/pull/85), and [#86](https://github.com/lukemelas/EfficientNet-PyTorch/pull/86). Thanks to the authors of all the pull requests!
-
-#### Update (July 31, 2019)
-
-_Upgrade the pip package with_ `pip install --upgrade efficientnet-pytorch`
-
-The B6 and B7 models are now available. Additionally, _all_ pretrained models have been updated to use AutoAugment preprocessing, which translates to better performance across the board. Usage is the same as before:
-```python
-from efficientnet_pytorch import EfficientNet
-model = EfficientNet.from_pretrained('efficientnet-b7')
+Input (B, T, 3, 380, 380)
+    → EfficientNet-B4 Backbone (frozen, 19.3M params)
+    → Global Average Pooling  → (B, T, 1792)
+    → Temporal Mean Pooling   → (B, 1792)
+    → FC(1792→512) + GELU + Dropout(0.3)
+    → FC(512→128)  + GELU + Dropout(0.2)
+    → FC(128→2)    + Softmax
+    → [Real | AI-Generated]
 ```
 
-#### Update (June 29, 2019)
+**Limitations addressed by the proposed model:**
+- Evaluates video frames as independent static images, blind to temporal inconsistencies
+- Cannot detect motion-based artifacts (flickering, morphing between frames)
+- Susceptible to single-generator overfitting when trained only on GAN or diffusion data
 
-This update adds easy model exporting ([#20](https://github.com/lukemelas/EfficientNet-PyTorch/issues/20)) and feature extraction ([#38](https://github.com/lukemelas/EfficientNet-PyTorch/issues/38)).
-
- * [Example: Export to ONNX](#example-export)
- * [Example: Extract features](#example-feature-extraction)
- * Also: fixed a CUDA/CPU bug ([#32](https://github.com/lukemelas/EfficientNet-PyTorch/issues/32))
-
-It is also now incredibly simple to load a pretrained model with a new number of classes for transfer learning:
+**Load the baseline:**
 ```python
-model = EfficientNet.from_pretrained('efficientnet-b1', num_classes=23)
+from thesis_experiment.models import build_model
+
+model = build_model(config='baseline', num_frames=16)
 ```
 
+---
 
-#### Update (June 23, 2019)
+### Proposed: Enhanced Spatiotemporal Model
 
-The B4 and B5 models are now available. Their usage is identical to the other models:
-```python
-from efficientnet_pytorch import EfficientNet
-model = EfficientNet.from_pretrained('efficientnet-b4')
+The proposed model extends the baseline with two enhancements inserted between the backbone and the classifier:
+
+1. **Temporal Shift Module (TSM)** — shifts 25% of feature channels forward and backward along the temporal axis, enabling zero-parameter inter-frame information exchange. Acts as a no-op for single images (T=1).
+
+2. **Multi-Head Self-Attention (MHSA)** — 4-head self-attention across the frame sequence, with LayerNorm and a Feed-Forward Network (FFN). Learns which frames contain the most forensically relevant artifacts and captures long-range temporal dependencies.
+
+**Architecture:**
+```
+Input (B, T, 3, 380, 380)
+    → EfficientNet-B4 Backbone (frozen, 19.3M params)
+    → Global Average Pooling         → (B, T, 1792)
+    ┌─────────────────────────────────────────────┐  ★ Proposed
+    │ Temporal Shift Module (TSM)   → (B, T, 1792) │  Contribution
+    │ Multi-Head Self-Attention     → (B, T, 1792) │
+    │   4 heads · d_k=448 · LayerNorm + FFN        │
+    └─────────────────────────────────────────────┘
+    → Temporal Mean Pooling          → (B, 1792)
+    → FC(1792→512) + GELU + Dropout(0.3)
+    → FC(512→128)  + GELU + Dropout(0.2)
+    → FC(128→2)    + Softmax
+    → [Real | AI-Generated]
 ```
 
-### Overview
-This repository contains an op-for-op PyTorch reimplementation of [EfficientNet](https://arxiv.org/abs/1905.11946), along with pre-trained models and examples.
+**Key properties:**
+- Works for **both images and videos** in a single unified architecture
+- TSM adds **zero additional parameters**
+- MHSA attention weights are exported for XAI (temporal explainability)
+- Backbone is frozen; only the TSM, MHSA, and classifier head are trained
 
-The goal of this implementation is to be simple, highly extensible, and easy to integrate into your own projects. This implementation is a work in progress -- new features are currently being implemented.
+**Load the proposed model:**
+```python
+from thesis_experiment.models import build_model
 
-At the moment, you can easily:
- * Load pretrained EfficientNet models
- * Use EfficientNet models for classification or feature extraction
- * Evaluate EfficientNet models on ImageNet or your own images
+model = build_model(config='proposed', num_frames=16)
+```
 
-_Upcoming features_: In the next few days, you will be able to:
- * Train new models from scratch on ImageNet with a simple command
- * Quickly finetune an EfficientNet on your own dataset
- * Export EfficientNet models for production
+---
 
-### Table of contents
-1. [About EfficientNet](#about-efficientnet)
-2. [About EfficientNet-PyTorch](#about-efficientnet-pytorch)
-3. [Installation](#installation)
-4. [Usage](#usage)
-    * [Load pretrained models](#loading-pretrained-models)
-    * [Example: Classify](#example-classification)
-    * [Example: Extract features](#example-feature-extraction)
-    * [Example: Export to ONNX](#example-export)
-6. [Contributing](#contributing)
+### Ablation Configurations
 
-### About EfficientNet
+Four configurations are available for comparative analysis:
 
-If you're new to EfficientNets, here is an explanation straight from the official TensorFlow implementation:
+| Config | TSM | MHSA | Purpose |
+|---|---|---|---|
+| `baseline` | ❌ | ❌ | Image-only baseline — no temporal modeling |
+| `tsm_only` | ✅ | ❌ | Isolate TSM contribution |
+| `mhsa_only` | ❌ | ✅ | Isolate MHSA contribution |
+| `proposed` | ✅ | ✅ | Full proposed model |
 
-EfficientNets are a family of image classification models, which achieve state-of-the-art accuracy, yet being an order-of-magnitude smaller and faster than previous models. We develop EfficientNets based on AutoML and Compound Scaling. In particular, we first use [AutoML Mobile framework](https://ai.googleblog.com/2018/08/mnasnet-towards-automating-design-of.html) to develop a mobile-size baseline network, named as EfficientNet-B0; Then, we use the compound scaling method to scale up this baseline to obtain EfficientNet-B1 to B7.
+```python
+from thesis_experiment.models import build_model
 
-<table border="0">
-<tr>
-    <td>
-    <img src="https://raw.githubusercontent.com/tensorflow/tpu/master/models/official/efficientnet/g3doc/params.png" width="100%" />
-    </td>
-    <td>
-    <img src="https://raw.githubusercontent.com/tensorflow/tpu/master/models/official/efficientnet/g3doc/flops.png", width="90%" />
-    </td>
-</tr>
-</table>
+baseline  = build_model(config='baseline')
+tsm_only  = build_model(config='tsm_only')
+mhsa_only = build_model(config='mhsa_only')
+proposed  = build_model(config='proposed')
+```
 
-EfficientNets achieve state-of-the-art accuracy on ImageNet with an order of magnitude better efficiency:
+---
 
+## Dataset
 
-* In high-accuracy regime, our EfficientNet-B7 achieves state-of-the-art 84.4% top-1 / 97.1% top-5 accuracy on ImageNet with 66M parameters and 37B FLOPS, being 8.4x smaller and 6.1x faster on CPU inference than previous best [Gpipe](https://arxiv.org/abs/1811.06965).
+Data is organized under `thesis_experiment/data/` with the following structure:
 
-* In middle-accuracy regime, our EfficientNet-B1 is 7.6x smaller and 5.7x faster on CPU inference than [ResNet-152](https://arxiv.org/abs/1512.03385), with similar ImageNet accuracy.
+```
+data/
+├── train/
+│   ├── real/       # Authentic images or videos
+│   └── fake/       # AI-generated images or videos
+└── val/
+    ├── real/
+    └── fake/
+```
 
-* Compared with the widely used [ResNet-50](https://arxiv.org/abs/1512.03385), our EfficientNet-B4 improves the top-1 accuracy from 76.3% of ResNet-50 to 82.6% (+6.3%), under similar FLOPS constraint.
+- **Sources:** Publicly available GAN-based and diffusion-based synthetic media datasets
+- **Formats supported:** `.mp4`, `.avi`, `.mov`, `.mkv`, `.webm`, `.flv`, and standard image formats
+- **Input resolution:** 380×380 (EfficientNet-B4 native resolution)
+- **Frames per video:** 16 evenly-spaced frames sampled per video clip
+- **Class balancing:** Explicit sample weighting applied during training to counteract class imbalance
 
-### About EfficientNet PyTorch
+---
 
-EfficientNet PyTorch is a PyTorch re-implementation of EfficientNet. It is consistent with the [original TensorFlow implementation](https://github.com/tensorflow/tpu/tree/master/models/official/efficientnet), such that it is easy to load weights from a TensorFlow checkpoint. At the same time, we aim to make our PyTorch implementation as simple, flexible, and extensible as possible.
+## Training
 
-If you have any feature requests or questions, feel free to leave them as GitHub issues!
+### Quick Smoke Test (no real data required)
+Verifies the full pipeline (forward pass, backward pass, VRAM usage) across all 4 configs using synthetic random tensors:
 
-### Installation
-
-Install via pip:
 ```bash
-pip install efficientnet_pytorch
+cd thesis_experiment
+python train.py --smoke-test
 ```
 
-Or install from source:
+### Train the Baseline (image-only)
 ```bash
-git clone https://github.com/lukemelas/EfficientNet-PyTorch
-cd EfficientNet-Pytorch
-pip install -e .
+python train.py --config baseline --data-dir data --epochs 20 --batch-size 4 --lr 1e-4
 ```
 
-### Usage
-
-#### Loading pretrained models
-
-Load an EfficientNet:
-```python
-from efficientnet_pytorch import EfficientNet
-model = EfficientNet.from_name('efficientnet-b0')
+### Train the Proposed Model
+```bash
+python train.py --config proposed --data-dir data --num-frames 16 --epochs 20 --batch-size 4 --lr 1e-4
 ```
 
-Load a pretrained EfficientNet:
-```python
-from efficientnet_pytorch import EfficientNet
-model = EfficientNet.from_pretrained('efficientnet-b0')
+### Train All Ablation Configs
+```bash
+for config in baseline tsm_only mhsa_only proposed; do
+    python train.py --config $config --data-dir data --epochs 20
+done
 ```
 
-Details about the models are below:
-
-|    *Name*         |*# Params*|*Top-1 Acc.*|*Pretrained?*|
-|:-----------------:|:--------:|:----------:|:-----------:|
-| `efficientnet-b0` |   5.3M   |    76.3    |      ✓      |
-| `efficientnet-b1` |   7.8M   |    78.8    |      ✓      |
-| `efficientnet-b2` |   9.2M   |    79.8    |      ✓      |
-| `efficientnet-b3` |    12M   |    81.1    |      ✓      |
-| `efficientnet-b4` |    19M   |    82.6    |      ✓      |
-| `efficientnet-b5` |    30M   |    83.3    |      ✓      |
-| `efficientnet-b6` |    43M   |    84.0    |      ✓      |
-| `efficientnet-b7` |    66M   |    84.4    |      ✓      |
-
-
-#### Example: Classification
-
-Below is a simple, complete example. It may also be found as a jupyter notebook in `examples/simple` or as a [Colab Notebook](https://colab.research.google.com/drive/1Jw28xZ1NJq4Cja4jLe6tJ6_F5lCzElb4).
-
-We assume that in your current directory, there is a `img.jpg` file and a `labels_map.txt` file (ImageNet class names). These are both included in `examples/simple`.
-
-```python
-import json
-from PIL import Image
-import torch
-from torchvision import transforms
-
-from efficientnet_pytorch import EfficientNet
-model = EfficientNet.from_pretrained('efficientnet-b0')
-
-# Preprocess image
-tfms = transforms.Compose([transforms.Resize(224), transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),])
-img = tfms(Image.open('img.jpg')).unsqueeze(0)
-print(img.shape) # torch.Size([1, 3, 224, 224])
-
-# Load ImageNet class names
-labels_map = json.load(open('labels_map.txt'))
-labels_map = [labels_map[str(i)] for i in range(1000)]
-
-# Classify
-model.eval()
-with torch.no_grad():
-    outputs = model(img)
-
-# Print predictions
-print('-----')
-for idx in torch.topk(outputs, k=5).indices.squeeze(0).tolist():
-    prob = torch.softmax(outputs, dim=1)[0, idx].item()
-    print('{label:<75} ({p:.2f}%)'.format(label=labels_map[idx], p=prob*100))
+### Optional: Load Pretrained Backbone Weights
+```bash
+python train.py --config proposed --backbone-weights /path/to/pretrained_b4.pth
 ```
 
-#### Example: Feature Extraction
+**Training arguments:**
 
-You can easily extract features with `model.extract_features`:
-```python
-from efficientnet_pytorch import EfficientNet
-model = EfficientNet.from_pretrained('efficientnet-b0')
+| Argument | Default | Description |
+|---|---|---|
+| `--config` | `proposed` | Model configuration (`baseline`, `tsm_only`, `mhsa_only`, `proposed`) |
+| `--data-dir` | `data` | Dataset root directory |
+| `--num-frames` | `16` | Frames sampled per video |
+| `--batch-size` | `4` | Training batch size |
+| `--epochs` | `20` | Number of training epochs |
+| `--lr` | `1e-4` | Learning rate (AdamW optimizer) |
+| `--num-workers` | `2` | Dataloader worker threads |
+| `--backbone-weights` | `None` | Path to pretrained backbone checkpoint |
+| `--smoke-test` | `False` | Run pipeline verification with synthetic data |
 
-# ... image preprocessing as in the classification example ...
-print(img.shape) # torch.Size([1, 3, 224, 224])
+Best model checkpoints are saved to `thesis_experiment/output/<config>/best_model.pth` based on validation AUC.
 
-features = model.extract_features(img)
-print(features.shape) # torch.Size([1, 1280, 7, 7])
+---
+
+## Evaluation Metrics
+
+Both the baseline and proposed models are evaluated using:
+
+| Metric | Description |
+|---|---|
+| **Accuracy** | Overall classification correctness |
+| **Precision** | True positives / (True positives + False positives) |
+| **Recall** | True positives / (True positives + False negatives) |
+| **F1-Score** | Harmonic mean of Precision and Recall |
+| **AUC** | Area under the ROC curve |
+
+Comparative analysis is conducted to quantify the impact of TSM, MHSA, and the full proposed model over the baseline. Models are also tested under real-world social media distortions (compression, resolution variation) to assess robustness.
+
+---
+
+## Installation
+
+**Requirements:** Python 3.8+, PyTorch 2.0+, CUDA (recommended)
+
+```bash
+# Clone the repository
+git clone https://github.com/Siege365/Enhanced-EfficientNet-PyTorch
+cd Enhanced-EfficientNet-PyTorch
+
+# Create virtual environment
+python -m venv .venv
+.venv\Scripts\activate   # Windows
+# source .venv/bin/activate  # Linux/macOS
+
+# Install dependencies
+pip install efficientnet_pytorch torch torchvision
+pip install opencv-python scikit-learn numpy
 ```
 
-#### Example: Export to ONNX
+---
 
-Exporting to ONNX for deploying to production is now simple:
-```python
-import torch
-from efficientnet_pytorch import EfficientNet
+## References
 
-model = EfficientNet.from_pretrained('efficientnet-b1')
-dummy_input = torch.randn(10, 3, 240, 240)
+1. Tan, M. & Le, Q. (2019). EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks. *ICML*.
+2. Lin, J., Gan, C., & Han, S. (2022). TSM: Temporal Shift Module for Efficient Video Understanding. *IEEE TPAMI*, 45(1), 133–145.
+3. Vaswani, A. et al. (2017). Attention Is All You Need. *NeurIPS*.
+4. Corvi, R. et al. (2023). On the Detection of Synthetic Images Generated by Diffusion Models. *IEEE ICASSP*.
+5. Ojha, U., Li, Y., & Lee, Y. J. (2023). Towards Universal Fake Image Detectors that Generalize Across Generative Models. *CVPR*.
+6. Selvaraju, R. R. et al. (2017). Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization. *ICCV*.
 
-model.set_swish(memory_efficient=False)
-torch.onnx.export(model, dummy_input, "test-b1.onnx", verbose=True)
-```
+---
 
-[Here](https://colab.research.google.com/drive/1rOAEXeXHaA8uo3aG2YcFDHItlRJMV0VP) is a Colab example.
-
-
-#### ImageNet
-
-See `examples/imagenet` for details about evaluating on ImageNet.
-
-### Contributing
-
-If you find a bug, create a GitHub issue, or even better, submit a pull request. Similarly, if you have questions, simply post them as GitHub issues.
-
-I look forward to seeing what the community does with these models!
+*This project builds upon the [EfficientNet-PyTorch](https://github.com/lukemelas/EfficientNet-PyTorch) library by Luke Melas-Kyriazi.*

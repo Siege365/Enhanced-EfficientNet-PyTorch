@@ -401,14 +401,20 @@ def generate_gemini_explanation(image_pil, prediction, confidence, model_name):
         image_pil.save(buf, format='JPEG', quality=85)
         img_bytes = buf.getvalue()
 
-        prompt = f"""You are a forensic AI image analyst. A deep learning model ({model_name}) has analyzed this image and classified it as **{prediction}** with **{confidence:.1%} confidence**.
+        prompt = f"""You are a friendly but expert AI image forensic analyst. A deep learning model ({model_name}) has analyzed this image and classified it as **{prediction}** with **{confidence:.1%} confidence**.
 
-Provide a concise, professional explanation (3-4 sentences) of:
-1. What visual cues in this image support the model's classification.
-2. Specific regions or artifacts that suggest it is {prediction.lower()}.
-3. A brief comment on whether this classification seems reliable.
+Write a clear, easy-to-understand explanation that both everyday users and technical experts can appreciate. Structure your response as follows:
 
-Be specific about what you observe in this particular image. Do not use bullet points — write in flowing paragraph form."""
+**What does this mean?**
+In 1-2 simple sentences, explain the result in plain language that anyone can understand — no jargon. Tell the user whether this image appears to be a real photograph or created by AI, and how confident the system is.
+
+**Why does the model think so?**
+In 2-3 sentences, describe the specific visual clues in THIS image that support the classification. Point out particular areas, textures, lighting, or artifacts you observe. If it appears AI-generated, mention telltale signs like unnatural smoothness, warped edges, inconsistent lighting, or strange background details. If it appears real, mention natural imperfections, consistent lighting, or realistic textures.
+
+**How reliable is this?**
+In 1 sentence, briefly comment on whether the {confidence:.1%} confidence level suggests a strong or borderline detection, and whether the user should trust this result or look more closely.
+
+Keep the tone conversational yet professional. Do not use bullet points — write in flowing paragraphs under each heading. Keep the total response concise (no more than 150 words)."""
 
         response = client.models.generate_content(
             model='gemini-3-flash-preview',
@@ -618,11 +624,18 @@ with tab_image:
                     </div>
                     """, unsafe_allow_html=True)
                 else:
+                    # Convert markdown bold/italic to HTML since we render with unsafe_allow_html
+                    import re
+                    explanation_html = explanation
+                    explanation_html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', explanation_html)
+                    explanation_html = re.sub(r'\*(.+?)\*', r'<em>\1</em>', explanation_html)
+                    explanation_html = explanation_html.replace('\n\n', '</p><p>')
+                    explanation_html = explanation_html.replace('\n', '<br>')
                     st.markdown(f"""
                     <div class="xai-card">
                         <span class="xai-badge">🧠 Explainable AI</span>
                         <h4>Why does the model think this is {result['prediction']}?</h4>
-                        <p>{explanation}</p>
+                        <p>{explanation_html}</p>
                     </div>
                     """, unsafe_allow_html=True)
         else:
