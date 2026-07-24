@@ -319,8 +319,6 @@ def load_model(model_name, weights_path, dropout=0.5):
 @st.cache_resource
 def download_models_if_missing():
     """Download models from Google Drive if they don't exist locally."""
-    import gdown
-    
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
     
     eff_dir = os.path.join(output_dir, 'efficientnet_b4_20260501_151231')
@@ -330,6 +328,13 @@ def download_models_if_missing():
     mob_path = os.path.join(mob_dir, 'best_model.pth')
     
     if not os.path.exists(eff_path) or not os.path.exists(mob_path):
+        try:
+            # pyrefly: ignore [missing-import]
+            import gdown
+        except ImportError:
+            st.warning("`gdown` is not installed. Please install via `pip install gdown` if you need to auto-download models from Google Drive.")
+            return
+
         with st.spinner("Downloading trained models from Google Drive... (This will take a minute on first run)"):
             if not os.path.exists(eff_path):
                 os.makedirs(eff_dir, exist_ok=True)
@@ -354,11 +359,12 @@ def auto_discover_models():
             else:
                 model_name = parts[0]
 
-            # Only show the two main models (skip CBAM/Spatial)
-            if model_name in ('mobilenet_v3', 'efficientnet_b4'):
+            # Show the main models and the latest continuous learning model (skip CBAM/Spatial)
+            if model_name in ('mobilenet_v3', 'efficientnet_b4', 'efficientnet_b4_continuous'):
                 display = {
                     'mobilenet_v3': '🟥 MobileNetV3-Small',
-                    'efficientnet_b4': '🟩 EfficientNet-B4',
+                    'efficientnet_b4': '🟩 EfficientNet-B4 (Phase 1 Vanilla)',
+                    'efficientnet_b4_continuous': '⚡ EfficientNet-B4 (Continual Learning v2 - July 4)',
                 }.get(model_name, model_name)
                 found[display] = {
                     'model_name': model_name,
@@ -636,33 +642,34 @@ with tab_image:
 
         # Gemini text explanation
         if has_api_key:
-            with st.spinner("🧠 Generating AI explanation..."):
-                explanation = generate_gemini_explanation(
-                    image, result['prediction'], result['confidence'], selected['model_name']
-                )
-            if explanation:
-                if explanation.startswith("ERROR:"):
-                    st.markdown(f"""
-                    <div class="xai-card" style="border-color: rgba(239, 68, 68, 0.3);">
-                        <span class="xai-badge" style="color: #ef4444; border-color: rgba(239, 68, 68, 0.3); background: rgba(239, 68, 68, 0.1);">⚠️ API Error</span>
-                        <p style="color: #cbd5e1;">{explanation.replace('ERROR: ', '')}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    # Convert markdown bold/italic to HTML since we render with unsafe_allow_html
-                    import re
-                    explanation_html = explanation
-                    explanation_html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', explanation_html)
-                    explanation_html = re.sub(r'\*(.+?)\*', r'<em>\1</em>', explanation_html)
-                    explanation_html = explanation_html.replace('\n\n', '</p><p>')
-                    explanation_html = explanation_html.replace('\n', '<br>')
-                    st.markdown(f"""
-                    <div class="xai-card">
-                        <span class="xai-badge">🧠 Explainable AI</span>
-                        <h4>Why does the model think this is {result['prediction']}?</h4>
-                        <p>{explanation_html}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
+            if st.button("🧠 Generate AI Explanation", help="Use Gemini AI to analyze the image and explain why the model made this prediction."):
+                with st.spinner("🧠 Generating AI explanation..."):
+                    explanation = generate_gemini_explanation(
+                        image, result['prediction'], result['confidence'], selected['model_name']
+                    )
+                if explanation:
+                    if explanation.startswith("ERROR:"):
+                        st.markdown(f"""
+                        <div class="xai-card" style="border-color: rgba(239, 68, 68, 0.3);">
+                            <span class="xai-badge" style="color: #ef4444; border-color: rgba(239, 68, 68, 0.3); background: rgba(239, 68, 68, 0.1);">⚠️ API Error</span>
+                            <p style="color: #cbd5e1;">{explanation.replace('ERROR: ', '')}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        # Convert markdown bold/italic to HTML since we render with unsafe_allow_html
+                        import re
+                        explanation_html = explanation
+                        explanation_html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', explanation_html)
+                        explanation_html = re.sub(r'\*(.+?)\*', r'<em>\1</em>', explanation_html)
+                        explanation_html = explanation_html.replace('\n\n', '</p><p>')
+                        explanation_html = explanation_html.replace('\n', '<br>')
+                        st.markdown(f"""
+                        <div class="xai-card">
+                            <span class="xai-badge">🧠 Explainable AI</span>
+                            <h4>Why does the model think this is {result['prediction']}?</h4>
+                            <p>{explanation_html}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
         else:
             st.markdown("""
             <div class="xai-card" style="border-color: rgba(148, 163, 184, 0.2);">

@@ -37,7 +37,7 @@ class TransferModel(nn.Module):
                 pretrained=True
             )
 
-        elif modelchoice == 'efficientnet_b4':
+        elif modelchoice in ('efficientnet_b4', 'efficientnet_b4_continuous'):
             self.model = VanillaEfficientNetB4(
                 num_classes=num_out_classes,
                 dropout=dropout,
@@ -116,7 +116,7 @@ def model_selection(modelname, num_out_classes, dropout=None):
             dropout=dropout or 0.0
         ), 224, True, ['image'], None
 
-    elif modelname == 'efficientnet_b4':
+    elif modelname in ('efficientnet_b4', 'efficientnet_b4_continuous'):
         return TransferModel(
             modelchoice='efficientnet_b4',
             num_out_classes=num_out_classes,

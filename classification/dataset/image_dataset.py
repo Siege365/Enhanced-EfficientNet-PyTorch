@@ -1,16 +1,22 @@
 """
 Unified Image Dataset Loader
 
-Supports two dataset formats:
-  1. CSV-labeled datasets (updated_data_1): CSV file maps filenames -> labels
-  2. Folder-structured datasets (updated_data_2, updated_data_3): real/ and fake/ subdirectories
+Supports three dataset formats:
+  1. CSV-labeled (updated_data_1)  : CSV maps filenames -> labels (Shutterstock + AI pairs)
+  2. Binary folder (updated_data_2, updated_data_3) : real/ and fake/ subdirectories
+  3. Multi-class folder (updated_data_4): real/, fake/, artificial/, deepfake/ subdirectories
+     — artificial and deepfake are both merged into label=1 (fake)
 
-This loader automatically detects the format and handles both seamlessly,
-allowing training on combined datasets from different sources.
+Continuous Learning:
+  4. ReplayBufferDataset: Mixes new training data with a fixed random sample of old training
+     data (the "replay buffer") to prevent catastrophic forgetting during Phase 2 training.
+
+Data root: E:\\Thesis_Datasets\\images\\
 
 Author: Multi-Model Comparative Study Project
 """
 import os
+import random
 import pandas as pd
 from PIL import Image
 from torch.utils.data import Dataset, ConcatDataset
@@ -70,17 +76,29 @@ class CSVImageDataset(Dataset):
 
 class FolderImageDataset(Dataset):
     """
-    Dataset loader for folder-structured image data (updated_data_2/3 format).
+    Dataset loader for folder-structured image data.
 
-    Expected structure:
+    Supports two structures:
+
+    Binary (updated_data_2, updated_data_3):
         root_dir/
-        |-- real/     (real images)
-        |-- fake/     (AI-generated images)
+        |-- real/          (label=0)
+        |-- fake/          (label=1)
+
+    Multi-class (updated_data_4) — merged into binary:
+        root_dir/
+        |-- real/          (label=0)
+        |-- fake/          (label=1)
+        |-- artificial/    (label=1, merged with fake)
+        |-- deepfake/      (label=1, merged with fake)
 
     Labels: 0 = Real, 1 = Fake (AI-generated)
     """
 
     SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff'}
+
+    # All folder names that map to label=1 (fake)
+    FAKE_FOLDER_NAMES = {'fake', 'artificial', 'deepfake'}
 
     def __init__(self, root_dir, transform=None):
         self.root_dir = root_dir
@@ -90,22 +108,29 @@ class FolderImageDataset(Dataset):
         # Load real images (label=0)
         real_dir = os.path.join(root_dir, 'real')
         if os.path.isdir(real_dir):
-            for fname in os.listdir(real_dir):
+            for fname in sorted(os.listdir(real_dir)):
                 ext = os.path.splitext(fname)[1].lower()
                 if ext in self.SUPPORTED_EXTENSIONS:
                     self.samples.append((os.path.join(real_dir, fname), 0))
+        else:
+            print(f"  Warning: No 'real/' folder found in {root_dir}")
 
-        # Load fake images (label=1)
-        fake_dir = os.path.join(root_dir, 'fake')
-        if os.path.isdir(fake_dir):
-            for fname in os.listdir(fake_dir):
-                ext = os.path.splitext(fname)[1].lower()
-                if ext in self.SUPPORTED_EXTENSIONS:
-                    self.samples.append((os.path.join(fake_dir, fname), 1))
+        # Load fake images (label=1) — supports fake/, artificial/, deepfake/
+        for folder_name in self.FAKE_FOLDER_NAMES:
+            fake_dir = os.path.join(root_dir, folder_name)
+            if os.path.isdir(fake_dir):
+                count = 0
+                for fname in sorted(os.listdir(fake_dir)):
+                    ext = os.path.splitext(fname)[1].lower()
+                    if ext in self.SUPPORTED_EXTENSIONS:
+                        self.samples.append((os.path.join(fake_dir, fname), 1))
+                        count += 1
+                if count > 0:
+                    print(f"    [{folder_name}/] → label=1 (fake): {count} images")
 
         n_real = sum(1 for _, l in self.samples if l == 0)
         n_fake = sum(1 for _, l in self.samples if l == 1)
-        print(f"  Loaded {len(self.samples)} images from folders: "
+        print(f"  Loaded {len(self.samples)} images from {root_dir}: "
               f"{n_real} real, {n_fake} fake")
 
     def __len__(self):
@@ -172,3 +197,114 @@ def create_dataset(dataset_config, split='train', transform=None):
     total = len(combined)
     print(f"\nCombined dataset: {total} total images from {len(datasets)} sources")
     return combined
+
+
+class ReplayBufferDataset(Dataset):
+    """
+    Experience Replay Dataset for Continuous Learning (Phase 2 training).
+
+    Combines NEW training data with a fixed random sample (the "replay buffer")
+    from OLD training data. This prevents catastrophic forgetting when the model
+    is fine-tuned on new AI generators without re-training on all old data.
+
+    Each epoch, call refresh_buffer() to re-sample a fresh random subset from old
+    data. Fresh sampling each epoch prevents overfitting to specific replay samples
+    and improves overall generalization.
+
+    Usage (in train.py):
+        new_ds = create_dataset(new_cfgs, split='train', transform=tf_train)
+        old_ds = create_dataset(old_cfgs, split='train', transform=tf_train)
+        combined = ReplayBufferDataset(new_ds, old_ds, buffer_size=15000)
+
+        # At the start of EVERY training epoch:
+        combined.refresh_buffer()
+
+    Args:
+        new_dataset  : Dataset of NEW data (D5, D6) — used in full
+        old_dataset  : Dataset of OLD data (D1, D2, D3) — sampled from
+        buffer_size  : Total old samples to include each epoch (default: 15000).
+                       Class-balanced: buffer_size//2 real + buffer_size//2 fake.
+        seed         : Random seed for reproducible initial sampling (default: 42)
+    """
+
+    def __init__(self, new_dataset, old_dataset, buffer_size=15000, seed=42):
+        self.new_dataset = new_dataset
+        self.old_dataset = old_dataset
+        self.buffer_size = buffer_size
+        self._rng = random.Random(seed)
+
+        # Fast O(1) label lookup helper without opening image files from disk
+        def _get_fast_label(ds, idx):
+            if isinstance(ds, ConcatDataset):
+                if idx < 0:
+                    if -idx > len(ds):
+                        raise ValueError("absolute value of index should not exceed dataset length")
+                    idx = len(ds) + idx
+                dataset_idx = bisect.bisect_right(ds.cumulative_sizes, idx)
+                if dataset_idx == 0:
+                    sample_idx = idx
+                else:
+                    sample_idx = idx - ds.cumulative_sizes[dataset_idx - 1]
+                return _get_fast_label(ds.datasets[dataset_idx], sample_idx)
+            if hasattr(ds, 'indices') and hasattr(ds, 'dataset'): # Subset
+                return _get_fast_label(ds.dataset, ds.indices[idx])
+            if hasattr(ds, 'df'): # CSVImageDataset
+                return int(ds.df.iloc[idx]['label'])
+            if hasattr(ds, 'samples'): # FolderImageDataset
+                return int(ds.samples[idx][1])
+            if hasattr(ds, 'video_clips'): # VideoFrameSequenceDataset
+                return int(ds.video_clips[idx][1])
+            _, label = ds[idx]
+            return label
+
+        import bisect
+        print(f"\n  [Replay] Indexing old dataset for balanced buffer sampling...")
+        old_real_idx = []
+        old_fake_idx = []
+        for i in range(len(old_dataset)):
+            try:
+                label = _get_fast_label(old_dataset, i)
+                (old_real_idx if label == 0 else old_fake_idx).append(i)
+            except Exception:
+                pass
+
+        n_real = len(old_real_idx)
+        n_fake = len(old_fake_idx)
+        per_class = min(buffer_size // 2, n_real, n_fake)
+        self.actual_buffer_size = per_class * 2
+
+        print(f"  [Replay] Old dataset index: {n_real:,} real | {n_fake:,} fake")
+        print(f"  [Replay] Buffer size: {self.actual_buffer_size:,} "
+              f"({per_class:,} real + {per_class:,} fake) "
+              f"from {n_real + n_fake:,} total old images")
+
+        self._old_real_idx = old_real_idx
+        self._old_fake_idx = old_fake_idx
+        self._per_class = per_class
+
+        # Build the initial buffer
+        self.buffer_indices = []
+        self.refresh_buffer()
+
+    def refresh_buffer(self):
+        """
+        Re-sample the replay buffer. Call at the START of each training epoch.
+        Provides fresh diversity each epoch and prevents replay sample memorization.
+        """
+        real_sample = self._rng.sample(self._old_real_idx, self._per_class)
+        fake_sample = self._rng.sample(self._old_fake_idx, self._per_class)
+        self.buffer_indices = real_sample + fake_sample
+        self._rng.shuffle(self.buffer_indices)
+
+    def __len__(self):
+        # Total length = all new data + replay buffer
+        return len(self.new_dataset) + len(self.buffer_indices)
+
+    def __getitem__(self, idx):
+        if idx < len(self.new_dataset):
+            # New sample — uses new_dataset's own transform
+            return self.new_dataset[idx]
+        else:
+            # Replay sample from old dataset
+            old_idx = self.buffer_indices[idx - len(self.new_dataset)]
+            return self.old_dataset[old_idx]

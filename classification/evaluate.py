@@ -32,7 +32,7 @@ from dataset.transform import (
 )
 from dataset.image_dataset import create_dataset
 
-DEFAULT_DATA_DIR = r'C:\Users\natha\OneDrive\Documents\Thesis Project\FaceForensics'
+DEFAULT_DATA_DIR = r'E:\Thesis_Datasets\images'
 
 
 def parse_args():
@@ -51,43 +51,82 @@ def parse_args():
 
 
 def build_test_datasets(args, transform):
-    """Loads the UNSEEN test split from updated_data_2 and updated_data_3, 
-    or from an external dataset if --data_dir_external is provided.
-    
-    NOTE: updated_data_1's test.csv is a Kaggle submission file with only
-    an 'id' column and NO ground-truth labels, so it cannot be used for
-    evaluation. We skip it entirely.
+    """
+    Loads the UNSEEN test split from datasets 2, 3, and 4.
+
+    Dataset sources (E:\\Thesis_Datasets\\images\\):
+      - updated_data_1 : SKIPPED — test.csv is a Kaggle submission file with no ground-truth labels
+      - updated_data_2 : DeepDetect-2025 — test/real/ + test/fake/
+      - updated_data_3 : OpenFake 2025-26  — test/real/ + test/fake/
+      - updated_data_4 : External test set  — test/real/ + test/fake/ + test/artificial/ + test/deepfake/
+                          (artificial and deepfake both merged to label=1)
+      - updated_data_5 : SuSy (if available) — test/real/ + test/fake/
+      - updated_data_6 : MS COCOAI (if available) — test/real/ + test/fake/
     """
     cfgs = []
-    
+    dataset_names = []  # track names for per-dataset eval
+
     if args.data_dir_external:
-        # Evaluate ONLY on the external dataset (e.g. Dataset 4)
+        # Evaluate ONLY on the external dataset path provided
         ext_base = args.data_dir_external
-            
         if os.path.exists(ext_base):
             cfgs.append({'type': 'folder', 'path': ext_base})
-            print(f"  [EXTERNAL] Evaluating exclusively on external dataset: {ext_base}")
+            dataset_names.append(os.path.basename(ext_base))
+            print(f"  [EXTERNAL] Evaluating exclusively on: {ext_base}")
         else:
             raise ValueError(f"External dataset path not found: {ext_base}")
     else:
-        # Default internal evaluation (Dataset 2 & 3)
+        # Default: evaluate on all available datasets
         root = args.data_dir
-        d2 = os.path.join(root, 'updated_data_2')
-        d3 = os.path.join(root, 'updated_data_3')
-        
-        print("  [SKIP] updated_data_1: test.csv has no labels (Kaggle submission format)")
-        if os.path.exists(d2):
-            cfgs.append({'type': 'folder', 'path': d2})
-            print(f"  [OK] Test data found: {d2}")
-        if os.path.exists(d3):
-            cfgs.append({'type': 'folder', 'path': d3})
-            print(f"  [OK] Modern AI test data found: {d3}")
-            
+        all_ds = [
+            ('updated_data_2', 'DeepDetect-2025'),
+            ('updated_data_3', 'OpenFake 2025-26'),
+            ('updated_data_4', 'External test set'),
+            ('updated_data_5', 'SuSy'),
+            ('updated_data_6', 'MS COCOAI (Defactify)'),
+        ]
+
+        print("  [SKIP] updated_data_1: test.csv has no ground-truth labels (Kaggle submission format)")
+
+        for folder, label in all_ds:
+            path = os.path.join(root, folder)
+            if os.path.exists(path):
+                cfgs.append({'type': 'folder', 'path': path})
+                dataset_names.append(f"{folder} ({label})")
+                print(f"  [OK] {folder} ({label}): {path}")
+            else:
+                print(f"  [SKIP] {folder} ({label}): not found")
+
     if not cfgs:
-        raise ValueError("No test datasets found!")
+        raise ValueError("No test datasets found! Check E:\\Thesis_Datasets\\images\\ exists.")
     ds = create_dataset(cfgs, split='test', transform=transform)
     print(f"\nTest dataset: {len(ds)} total images")
-    return ds
+    return ds, cfgs, dataset_names
+
+
+def evaluate_per_dataset(model, device, args, cfgs, dataset_names, transform, eval_dir):
+    print("\nStarting per-dataset evaluation...")
+    results = {}
+    for cfg, name in zip(cfgs, dataset_names):
+        print(f"  -> Evaluating {name}...")
+        ds = create_dataset([cfg], split='test', transform=transform)
+        loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
+                            num_workers=args.num_workers, pin_memory=True)
+        
+        preds_all, labels_all = [], []
+        with torch.no_grad():
+            for imgs, labs in loader:
+                imgs = imgs.to(device)
+                out = model(imgs)
+                preds_all.extend(out.argmax(1).cpu().numpy())
+                labels_all.extend(labs.numpy())
+        
+        acc = accuracy_score(labels_all, preds_all)
+        results[name] = {"accuracy": float(acc), "samples": len(ds)}
+        print(f"     Accuracy: {acc:.4f}")
+    
+    with open(os.path.join(eval_dir, 'per_dataset_metrics.json'), 'w') as f:
+        json.dump(results, f, indent=2)
 
 
 def plot_confusion_matrix(cm, output_path, model_name):
@@ -155,7 +194,7 @@ def main():
 
     # Build test dataset
     print(f"\nLoading UNSEEN test data...")
-    test_ds = build_test_datasets(args, transform)
+    test_ds, cfgs, dataset_names = build_test_datasets(args, transform)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False,
                               num_workers=args.num_workers, pin_memory=True)
 
@@ -229,6 +268,10 @@ def main():
     print("\nGenerating plots...")
     plot_confusion_matrix(cm, os.path.join(eval_dir, 'confusion_matrix.png'), args.model)
     plot_roc_curve(labels_all, probs_all, os.path.join(eval_dir, 'roc_curve.png'), args.model, auc)
+
+    # Per-dataset breakdown (anti-forgetting evidence)
+    if not args.data_dir_external and len(cfgs) > 1:
+        evaluate_per_dataset(model, device, args, cfgs, dataset_names, transform, eval_dir)
 
     print(f"\nEvaluation complete! All results saved to:\n  {eval_dir}")
 
