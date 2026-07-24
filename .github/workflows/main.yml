@@ -1,21 +1,25 @@
-name: Workflow
+name: Code Quality Check
 
 on:
   push:
     branches:
-    - master
+      - master
 
 jobs:
-  pypi-job:
+  lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: Install twine
-        run: pip install twine
-      - name: Build package
-        run: python setup.py sdist
-      - name: Publish a Python distribution to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          python-version: '3.13'
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile classification/train.py
+          python -m py_compile classification/train_video.py
+          python -m py_compile classification/evaluate.py
+          python -m py_compile classification/app.py
+          echo "All files passed syntax check!"
