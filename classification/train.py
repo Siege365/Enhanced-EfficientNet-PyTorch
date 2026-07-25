@@ -71,6 +71,8 @@ def parse_args():
                    help='Fine-tune from --resume checkpoint with lower LR')
     p.add_argument('--subset_fraction', type=float, default=1.0,
                    help='Fraction of the dataset to use for training (0.0 to 1.0)')
+    p.add_argument('--enhanced_aug', action='store_true', default=False,
+                   help='Use enhanced transforms (JPEG compression, blur, resizing) for in-the-wild robustness')
 
     # ── Continuous Learning arguments ──────────────────────────────────────────
     p.add_argument('--continuous', action='store_true', default=False,
@@ -407,13 +409,11 @@ def main():
     json.dump(cfg, open(os.path.join(odir, 'config.json'), 'w'), indent=2)
     log_info(f"Session started. Output dir: {odir} | Model: {args.model} | AMP: {use_amp}")
 
-    # Select transforms based on model
+    # Select transforms based on model and enhanced_aug flag
     if args.model == 'mobilenet_v3':
-        tf = mobilenet_default_data_transforms
-    elif args.model == 'efficientnet_b4':
-        tf = efficientnet_default_data_transforms
-    elif args.model in ('efficientnet_b4_cbam', 'efficientnet_b4_spatial'):
-        tf = efficientnet_enhanced_data_transforms
+        tf = mobilenet_enhanced_data_transforms if args.enhanced_aug else mobilenet_default_data_transforms
+    elif args.model.startswith('efficientnet_b4'):
+        tf = efficientnet_enhanced_data_transforms if args.enhanced_aug else efficientnet_default_data_transforms
     else:
         tf = efficientnet_default_data_transforms
 
