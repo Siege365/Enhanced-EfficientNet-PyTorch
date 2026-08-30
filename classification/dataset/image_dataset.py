@@ -17,6 +17,7 @@ Author: Multi-Model Comparative Study Project
 """
 import os
 import random
+import time
 import pandas as pd
 from PIL import Image
 from torch.utils.data import Dataset, ConcatDataset
@@ -48,10 +49,12 @@ class CSVImageDataset(Dataset):
                 f"Found: {list(self.df.columns)}"
             )
 
-        # Filter out missing files
-        valid_mask = self.df['file_name'].apply(
-            lambda f: os.path.exists(os.path.join(root_dir, f))
-        )
+        # [CLOUD PERFORMANCE FIX]
+        # We skip the os.path.exists() check because doing it for 100k+ files
+        # over a Google Drive network mount takes over an hour.
+        # We trust that the CSV is completely accurate.
+        valid_mask = pd.Series([True] * len(self.df))
+        
         n_missing = (~valid_mask).sum()
         if n_missing > 0:
             print(f"  Warning: {n_missing} images not found, skipping them.")
@@ -68,7 +71,14 @@ class CSVImageDataset(Dataset):
         row = self.df.iloc[idx]
         img_path = os.path.join(self.root_dir, row['file_name'])
         label = int(row['label'])
-        image = Image.open(img_path).convert('RGB')
+        
+        try:
+            image = Image.open(img_path).convert('RGB')
+        except (FileNotFoundError, OSError):
+            # [CLOUD SAFETY FIX] If image is corrupted or missing, randomly pick another one
+            # to prevent the entire training run from crashing.
+            return self.__getitem__(random.randint(0, len(self.df) - 1))
+            
         if self.transform:
             image = self.transform(image)
         return image, label
@@ -105,10 +115,21 @@ class FolderImageDataset(Dataset):
         self.transform = transform
         self.samples = []
 
+        def safe_listdir(path, max_retries=3):
+            # [CLOUD SAFETY FIX] Google Drive API throttles os.listdir for large folders
+            # causing OSError: [Errno 5] Input/output error. We must retry a few times.
+            for attempt in range(max_retries):
+                try:
+                    return sorted(os.listdir(path))
+                except OSError as e:
+                    print(f"  [Cloud I/O Error] Retry {attempt+1}/{max_retries} for {path}: {e}")
+                    time.sleep(2)
+            raise OSError(f"Failed to list {path} after {max_retries} retries due to Google Drive network throttling.")
+
         # Load real images (label=0)
         real_dir = os.path.join(root_dir, 'real')
         if os.path.isdir(real_dir):
-            for fname in sorted(os.listdir(real_dir)):
+            for fname in safe_listdir(real_dir):
                 ext = os.path.splitext(fname)[1].lower()
                 if ext in self.SUPPORTED_EXTENSIONS:
                     self.samples.append((os.path.join(real_dir, fname), 0))
@@ -120,7 +141,7 @@ class FolderImageDataset(Dataset):
             fake_dir = os.path.join(root_dir, folder_name)
             if os.path.isdir(fake_dir):
                 count = 0
-                for fname in sorted(os.listdir(fake_dir)):
+                for fname in safe_listdir(fake_dir):
                     ext = os.path.splitext(fname)[1].lower()
                     if ext in self.SUPPORTED_EXTENSIONS:
                         self.samples.append((os.path.join(fake_dir, fname), 1))
