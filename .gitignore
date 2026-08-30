@@ -152,19 +152,8 @@ baseline_architecture.html
 data.zip
 
 # ── Scripts Created for Data Collection/Extraction (Private) ──
-classification/civitai_scraper.py
-classification/download_dataset4.py
-classification/download_new_datasets.py
-classification/download_video_datasets.py
-classification/extract_ff_frames.py
-classification/extract_susy.py
-classification/extract_video_datasets.py
-classification/hailuo_scraper.py
-classification/inspect_dom.py
-classification/kling_scraper.py
-classification/remove_duplicates.py
-classification/reorganize_synthvid.py
-
+classification/scripts
+docs 
 # ── Video Training Outputs ──
 classification/output_video/
 
