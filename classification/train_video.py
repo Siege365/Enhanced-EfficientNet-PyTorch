@@ -276,7 +276,7 @@ def main():
             resume_ckpt = os.path.join(args.resume, 'best_video_model.pth')
         if os.path.exists(resume_ckpt):
             log_info(f"[Resume] Loading checkpoint: {resume_ckpt}")
-            ckpt = torch.load(resume_ckpt, map_location=device)
+            ckpt = torch.load(resume_ckpt, map_location=device, weights_only=False)
             model.load_state_dict(ckpt['model_state_dict'])
             optimizer.load_state_dict(ckpt['optimizer_state_dict'])
             if 'scheduler_state_dict' in ckpt:

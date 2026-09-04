@@ -483,7 +483,7 @@ def main():
 
     checkpoint_path = args.old_checkpoint if args.continuous else args.resume
     if checkpoint_path:
-        ck = torch.load(checkpoint_path, map_location=device)
+        ck = torch.load(checkpoint_path, map_location=device, weights_only=False)
         model.load_state_dict(ck['model_state_dict'])
         if args.continuous:
             # Continuous learning: fresh optimizer, start from epoch 0

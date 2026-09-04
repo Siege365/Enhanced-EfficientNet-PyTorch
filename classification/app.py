@@ -309,7 +309,7 @@ def load_model(model_name, weights_path, dropout=0.5):
     """Load a trained model from checkpoint."""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model, img_sz, *_ = model_selection(model_name, num_out_classes=2, dropout=dropout)
-    checkpoint = torch.load(weights_path, map_location=device)
+    checkpoint = torch.load(weights_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
     model.eval()

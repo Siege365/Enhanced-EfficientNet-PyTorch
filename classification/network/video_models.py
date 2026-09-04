@@ -147,7 +147,7 @@ class VideoEfficientNetB4(nn.Module):
         # Load Phase 1/2 pretrained checkpoint if provided
         if pretrained_image_checkpoint and os.path.exists(pretrained_image_checkpoint):
             print(f"  [VideoModel] Loading Phase 1/2 checkpoint: {pretrained_image_checkpoint}")
-            state_dict = torch.load(pretrained_image_checkpoint, map_location='cpu')
+            state_dict = torch.load(pretrained_image_checkpoint, map_location='cpu', weights_only=False)
             # Handle state dict unwrapping if stored under 'model_state_dict' or 'state_dict'
             if isinstance(state_dict, dict):
                 if 'model_state_dict' in state_dict:
