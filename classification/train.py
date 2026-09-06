@@ -18,6 +18,7 @@ import os, sys, csv, json, time, argparse
 from datetime import datetime
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from torch.cuda.amp import GradScaler, autocast
@@ -30,6 +31,7 @@ from network.models import model_selection
 from dataset.transform import (
     efficientnet_default_data_transforms,
     efficientnet_enhanced_data_transforms,
+    efficientnet_hardened_data_transforms,
     mobilenet_default_data_transforms,
     mobilenet_enhanced_data_transforms
 )
@@ -48,6 +50,55 @@ def log_info(msg=""):
     if CONSOLE_LOG_FILE and formatted:
         with open(CONSOLE_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(formatted + "\n")
+
+
+# ==============================================================================
+# FOCAL LOSS
+# ==============================================================================
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for binary classification.
+    Addresses class imbalance AND hard-example mining simultaneously.
+
+    Down-weights easy examples (well-classified clean images) and forces the
+    model to focus on hard examples (borderline compressed/processed images).
+    This directly targets the 'hit-or-miss on compressed images' failure mode.
+
+    Reference: Lin et al., "Focal Loss for Dense Object Detection" (ICCV 2017)
+
+    Args:
+        alpha (float): Balancing factor. 1.0 = no class balancing (default).
+        gamma (float): Focusing parameter. Higher = more focus on hard examples.
+                       gamma=0 => standard CrossEntropy.
+                       gamma=2 => recommended for most use-cases.
+        label_smoothing (float): Label smoothing factor (0.0 = off, 0.1 = recommended).
+    """
+    def __init__(self, alpha=1.0, gamma=2.0, label_smoothing=0.0, num_classes=2):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.label_smoothing = label_smoothing
+        self.num_classes = num_classes
+
+    def forward(self, inputs, targets):
+        if self.label_smoothing > 0.0:
+            # Convert to smooth one-hot targets
+            n = inputs.size(0)
+            smooth_targets = torch.full(
+                (n, self.num_classes),
+                self.label_smoothing / (self.num_classes - 1),
+                device=inputs.device, dtype=inputs.dtype
+            )
+            smooth_targets.scatter_(1, targets.unsqueeze(1), 1.0 - self.label_smoothing)
+            log_probs = F.log_softmax(inputs, dim=1)
+            ce_loss = -(smooth_targets * log_probs).sum(dim=1)
+        else:
+            ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * ((1 - pt) ** self.gamma) * ce_loss
+        return focal_loss.mean()
 
 
 def parse_args():
@@ -72,7 +123,16 @@ def parse_args():
     p.add_argument('--subset_fraction', type=float, default=1.0,
                    help='Fraction of the dataset to use for training (0.0 to 1.0)')
     p.add_argument('--enhanced_aug', action='store_true', default=False,
-                   help='Use enhanced transforms (JPEG compression, blur, resizing) for in-the-wild robustness')
+                   help='Use enhanced transforms (JPEG compression p=0.5, blur, resizing) for in-the-wild robustness')
+    p.add_argument('--hardened_aug', action='store_true', default=False,
+                   help='Use hardened transforms: mandatory ChainedJPEGCompression on every sample. '
+                        'Stronger than --enhanced_aug. Recommended for Hardened Joint Retraining.')
+    p.add_argument('--focal_loss', action='store_true', default=False,
+                   help='Use Focal Loss (gamma=2) instead of CrossEntropy. '
+                        'Focuses training on hard, borderline compressed examples.')
+    p.add_argument('--label_smoothing', type=float, default=0.0,
+                   help='Label smoothing factor for loss (0.0 = off, 0.1 = recommended). '
+                        'Works with both CrossEntropy and Focal Loss.')
 
     # ── Continuous Learning arguments ──────────────────────────────────────────
     p.add_argument('--continuous', action='store_true', default=False,
@@ -409,11 +469,20 @@ def main():
     json.dump(cfg, open(os.path.join(odir, 'config.json'), 'w'), indent=2)
     log_info(f"Session started. Output dir: {odir} | Model: {args.model} | AMP: {use_amp}")
 
-    # Select transforms based on model and enhanced_aug flag
+    # Select transforms based on model and augmentation flags
+    # Priority: --hardened_aug > --enhanced_aug > default
     if args.model == 'mobilenet_v3':
         tf = mobilenet_enhanced_data_transforms if args.enhanced_aug else mobilenet_default_data_transforms
     elif args.model.startswith('efficientnet_b4'):
-        tf = efficientnet_enhanced_data_transforms if args.enhanced_aug else efficientnet_default_data_transforms
+        if args.hardened_aug:
+            tf = efficientnet_hardened_data_transforms
+            log_info("  Augmentation: HARDENED (mandatory ChainedJPEGCompression on every sample)")
+        elif args.enhanced_aug:
+            tf = efficientnet_enhanced_data_transforms
+            log_info("  Augmentation: ENHANCED (JPEG p=0.5, blur, downscale)")
+        else:
+            tf = efficientnet_default_data_transforms
+            log_info("  Augmentation: DEFAULT (vanilla)")
     else:
         tf = efficientnet_default_data_transforms
 
@@ -450,17 +519,36 @@ def main():
     tp = sum(p.numel() for p in model.parameters())
     print(f"  Params: {tp:,}")
 
-    # Class-weighted loss to combat fake-heavy imbalance in D5/D6
-    if class_counts is not None:
+    # Loss function selection
+    use_focal = args.focal_loss
+    ls = args.label_smoothing
+
+    if use_focal:
+        # Class-weighted Focal Loss: combines hard-example mining with class balancing
+        if class_counts is not None:
+            n_real, n_fake = class_counts
+            total = n_real + n_fake
+            w_real = total / (2.0 * n_real)
+            w_fake = total / (2.0 * n_fake)
+            # Use the minority class alpha (real images usually underrepresented vs fake)
+            alpha = w_real / (w_real + w_fake)
+            log_info(f"  Loss: FocalLoss(gamma=2, alpha={alpha:.3f}, label_smoothing={ls}) — class-weighted")
+        else:
+            alpha = 1.0
+            log_info(f"  Loss: FocalLoss(gamma=2, alpha={alpha:.3f}, label_smoothing={ls})")
+        criterion = FocalLoss(alpha=alpha, gamma=2.0, label_smoothing=ls, num_classes=2).to(device)
+    elif class_counts is not None:
+        # Class-weighted CrossEntropy (original continuous learning behavior)
         n_real, n_fake = class_counts
         total = n_real + n_fake
         w_real = total / (2.0 * n_real)
         w_fake = total / (2.0 * n_fake)
         weights = torch.tensor([w_real, w_fake], dtype=torch.float32).to(device)
-        criterion = nn.CrossEntropyLoss(weight=weights)
-        log_info(f"  Class-weighted loss: real={w_real:.3f}, fake={w_fake:.3f}")
+        criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=ls)
+        log_info(f"  Loss: CrossEntropyLoss(weighted real={w_real:.3f}, fake={w_fake:.3f}, label_smoothing={ls})")
     else:
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(label_smoothing=ls)
+        log_info(f"  Loss: CrossEntropyLoss(label_smoothing={ls})")
 
     # In continuous mode: use the old_checkpoint LR * 0.1 (much lower to avoid overwriting)
     if args.continuous:

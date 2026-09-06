@@ -321,7 +321,7 @@ def download_models_if_missing():
     """Download models from Google Drive if they don't exist locally."""
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
     
-    eff_dir = os.path.join(output_dir, 'efficientnet_b4_20260501_151231')
+    eff_dir = os.path.join(output_dir, 'efficientnet_b4_20260903_144444')
     eff_path = os.path.join(eff_dir, 'best_model.pth')
     
     mob_dir = os.path.join(output_dir, 'mobilenet_v3_20260502_225732')
@@ -349,28 +349,49 @@ def auto_discover_models():
     """Scan the output directory for trained model checkpoints."""
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
     found = {}
-    for folder in sorted(os.listdir(output_dir)):
-        best = os.path.join(output_dir, folder, 'best_model.pth')
-        if os.path.isfile(best):
-            # Parse model name from folder (e.g., "efficientnet_b4_20260501_151231")
-            parts = folder.rsplit('_', 2)  # Split off timestamp
-            if len(parts) >= 3:
-                model_name = '_'.join(parts[:-2])
-            else:
-                model_name = parts[0]
+    
+    # Map exact folder names to descriptive UI labels
+    display_mapping = {
+        'efficientnet_b4_20260501_151231': '🟩 EfficientNet-B4 (Phase 1 - D1-D3)',
+        'efficientnet_b4_continuous_20260704_232952': '⚡ EfficientNet-B4 (Phase 2 - Continual Old)',
+        'efficientnet_b4_20260723_230925': '✨ EfficientNet-B4 (Phase 2 - Joint Early)',
+        'efficientnet_b4_20260903_144444': '🌟 EfficientNet-B4 (Phase 2 - Joint Enhanced - BEST)',
+        'efficientnet_b4_20260904_204027': '🏆 EfficientNet-B4 (Phase 3 - 100% D1-D3 + JPEG)',
+        # Hardened Joint Retraining — will appear once trained on Colab
+        'efficientnet_b4_hardened': '🔥 EfficientNet-B4 (Hardened Joint - Focal Loss)',
+        'mobilenet_v3_20260502_225732': '🟥 MobileNetV3-Small'
+    }
 
-            # Show the main models and the latest continuous learning model (skip CBAM/Spatial)
-            if model_name in ('mobilenet_v3', 'efficientnet_b4', 'efficientnet_b4_continuous'):
-                display = {
-                    'mobilenet_v3': '🟥 MobileNetV3-Small',
-                    'efficientnet_b4': '🟩 EfficientNet-B4 (Phase 1 Vanilla)',
-                    'efficientnet_b4_continuous': '⚡ EfficientNet-B4 (Continual Learning v2 - July 4)',
-                }.get(model_name, model_name)
-                found[display] = {
+    if os.path.exists(output_dir):
+        for folder in sorted(os.listdir(output_dir)):
+            best = os.path.join(output_dir, folder, 'best_model.pth')
+            if os.path.isfile(best):
+                display_name = display_mapping.get(folder, f"🔹 {folder}")
+                
+                # Determine base model name for architecture
+                if 'mobilenet' in folder:
+                    model_name = 'mobilenet_v3'
+                else:
+                    model_name = 'efficientnet_b4'
+                    
+                found[display_name] = {
                     'model_name': model_name,
                     'weights': best,
                     'folder': folder
                 }
+                    
+    # Add Ensemble Mode if both required models exist
+    phase1_key = '🟩 EfficientNet-B4 (Phase 1 - D1-D3)'
+    phase2_key = '🌟 EfficientNet-B4 (Phase 2 - Joint Enhanced - BEST)'
+    if phase1_key in found and phase2_key in found:
+        found['🔥 ENSEMBLE (Phase 1 + Phase 2 Best)'] = {
+            'model_name': 'ensemble',
+            'weights': None, # Special flag
+            'folder': 'ensemble',
+            'phase1': found[phase1_key],
+            'phase2': found[phase2_key]
+        }
+                    
     return found
 
 
@@ -464,8 +485,22 @@ Keep the tone conversational yet professional. Do not use bullet points — writ
             return f"ERROR: The AI failed to generate an explanation. Raw error: {str(e)}"
 
 
-def predict_image(model, device, image_pil, transform):
+def predict_image(model, device, image_pil, transform, threshold=0.5):
     """Run inference on a single PIL image."""
+    if isinstance(model, tuple):
+        m1, m2 = model
+        res1 = predict_image(m1, device, image_pil, transform, threshold=threshold)
+        res2 = predict_image(m2, device, image_pil, transform, threshold=threshold)
+        final_fake_prob = max(res1['fake_prob'], res2['fake_prob'])
+        final_real_prob = 1.0 - final_fake_prob
+        return {
+            'prediction': 'AI-GENERATED' if final_fake_prob >= threshold else 'REAL',
+            'real_prob': final_real_prob,
+            'fake_prob': final_fake_prob,
+            'confidence': max(final_real_prob, final_fake_prob),
+            'inference_ms': res1['inference_ms'] + res2['inference_ms']
+        }
+
     start = time.time()
     img_tensor = transform(image_pil).unsqueeze(0).to(device)
     with torch.no_grad():
@@ -476,7 +511,9 @@ def predict_image(model, device, image_pil, transform):
 
     real_prob = probs[0].item()
     fake_prob = probs[1].item()
-    prediction = 'REAL' if real_prob > fake_prob else 'AI-GENERATED'
+    
+    # Use dynamic threshold instead of hardcoded > fake_prob
+    prediction = 'AI-GENERATED' if fake_prob >= threshold else 'REAL'
 
     return {
         'prediction': prediction,
@@ -507,14 +544,43 @@ with st.sidebar:
     selected = models[selected_display]
 
     st.markdown("---")
+    st.markdown("### 🎛️ Sensitivity Threshold")
+    
+    # Auto-adjust default threshold based on chosen model
+    default_thresh = 0.50
+    if selected['model_name'] == 'ensemble':
+        default_thresh = 0.50 # Ensemble handles its own confidence
+    elif '20260903' in selected['folder']:
+        default_thresh = 0.1967  # Youden's J for MIRAGE (Joint Enhanced)
+    elif '20260904' in selected['folder']:
+        default_thresh = 0.2658  # Youden's J for Colab model on MIRAGE
+    elif 'hardened' in selected['folder']:
+        default_thresh = 0.50   # Will be updated after evaluation
+    
+    ui_threshold = st.slider(
+        "Decision Boundary (Fake %)",
+        min_value=0.0001,
+        max_value=1.0,
+        value=default_thresh,
+        step=0.01,
+        format="%.4f",
+        help="Lower values make the model more aggressive at catching fakes. Higher values make it more conservative."
+    )
+
+    st.markdown("---")
     st.markdown("### 📊 Model Info")
-    param_counts = {
-        'mobilenet_v3': '2,542,474',
-        'efficientnet_b4': '19,344,370',
-    }
-    st.markdown(f"**Architecture:** `{selected['model_name']}`")
-    st.markdown(f"**Parameters:** `{param_counts.get(selected['model_name'], 'N/A')}`")
-    st.markdown(f"**Checkpoint:** `{selected['folder']}`")
+    if selected['model_name'] == 'ensemble':
+        st.markdown("**Architecture:** `Ensemble (Dual EfficientNet-B4)`")
+        st.markdown("**Parameters:** `38,688,740` (Combined)")
+        st.markdown("**Logic:** Takes the `MAX(Fake_Prob)` from Phase 1 and Phase 2.")
+    else:
+        param_counts = {
+            'mobilenet_v3': '2,542,474',
+            'efficientnet_b4': '19,344,370',
+        }
+        st.markdown(f"**Architecture:** `{selected['model_name']}`")
+        st.markdown(f"**Parameters:** `{param_counts.get(selected['model_name'], 'N/A')}`")
+        st.markdown(f"**Checkpoint:** `{selected['folder']}`")
 
     st.markdown("---")
     st.markdown("### ⚡ System")
@@ -530,9 +596,16 @@ st.markdown('<h1 class="hero-title"><span style="-webkit-text-fill-color: initia
 st.markdown('<p class="hero-subtitle">Deep Learning Approach for Detecting AI-Generated Media on Social Media</p>',
             unsafe_allow_html=True)
 
-# Load model
-model, device = load_model(selected['model_name'], selected['weights'])
-transform = get_transform(selected['model_name'])
+# Load model(s)
+if selected['model_name'] == 'ensemble':
+    model1, device1 = load_model(selected['phase1']['model_name'], selected['phase1']['weights'])
+    model2, device2 = load_model(selected['phase2']['model_name'], selected['phase2']['weights'])
+    model = (model1, model2) # Tuple to signify ensemble
+    device = device1
+    transform = get_transform('efficientnet_b4')
+else:
+    model, device = load_model(selected['model_name'], selected['weights'])
+    transform = get_transform(selected['model_name'])
 
 # Tabs
 tab_image, tab_batch, tab_about = st.tabs(["🖼️ Single Image", "📁 Batch Analysis", "ℹ️ About"])
@@ -574,19 +647,43 @@ with tab_image:
                 st.error("Could not load image from URL. Please ensure it is a direct link to an image file (.jpg, .png).")
 
     if image:
-        result = predict_image(model, device, image, transform)
+        if isinstance(model, tuple):
+            # ENSEMBLE INFERENCE
+            m1, m2 = model
+            res1 = predict_image(m1, device, image, transform, threshold=ui_threshold)
+            res2 = predict_image(m2, device, image, transform, threshold=ui_threshold)
+            
+            # Combine logic: Max Fake Probability wins
+            final_fake_prob = max(res1['fake_prob'], res2['fake_prob'])
+            final_real_prob = 1.0 - final_fake_prob
+            
+            result = {
+                'prediction': 'AI-GENERATED' if final_fake_prob >= ui_threshold else 'REAL',
+                'real_prob': final_real_prob,
+                'fake_prob': final_fake_prob,
+                'confidence': max(final_real_prob, final_fake_prob),
+                'inference_ms': res1['inference_ms'] + res2['inference_ms']
+            }
+            # Use the model that triggered the highest fake prob for grad-cam
+            winning_model_for_cam = m1 if res1['fake_prob'] >= res2['fake_prob'] else m2
+            active_cam_model_name = 'efficientnet_b4'
+        else:
+            # SINGLE MODEL INFERENCE
+            result = predict_image(model, device, image, transform, threshold=ui_threshold)
+            winning_model_for_cam = model
+            active_cam_model_name = selected['model_name']
 
         col_img, col_cam = st.columns([1, 1])
 
         with col_img:
-            st.image(image, caption="Original Image", use_container_width=True)
+            st.image(image, caption="Original Image", width="stretch")
 
         with col_cam:
             pred_idx = 1 if result['prediction'] != 'REAL' else 0
             with st.spinner("Generating Grad-CAM heatmap..."):
-                heatmap = generate_gradcam(model, device, image, transform, selected['model_name'], pred_idx)
+                heatmap = generate_gradcam(winning_model_for_cam, device, image, transform, active_cam_model_name, pred_idx)
             if heatmap:
-                st.image(heatmap, caption="Grad-CAM Activation Heatmap", use_container_width=True)
+                st.image(heatmap, caption="Grad-CAM Activation Heatmap", width="stretch")
             else:
                 st.info("Heatmap could not be generated.")
 
@@ -731,7 +828,21 @@ with tab_batch:
 
         results = []
         for i, item in enumerate(images_to_process):
-            res = predict_image(model, device, item['image'], transform)
+            if isinstance(model, tuple):
+                m1, m2 = model
+                res1 = predict_image(m1, device, item['image'], transform, threshold=ui_threshold)
+                res2 = predict_image(m2, device, item['image'], transform, threshold=ui_threshold)
+                final_fake_prob = max(res1['fake_prob'], res2['fake_prob'])
+                final_real_prob = 1.0 - final_fake_prob
+                res = {
+                    'prediction': 'AI-GENERATED' if final_fake_prob >= ui_threshold else 'REAL',
+                    'real_prob': final_real_prob,
+                    'fake_prob': final_fake_prob,
+                    'confidence': max(final_real_prob, final_fake_prob),
+                    'inference_ms': res1['inference_ms'] + res2['inference_ms']
+                }
+            else:
+                res = predict_image(model, device, item['image'], transform, threshold=ui_threshold)
             res['filename'] = item['filename']
             res['image'] = item['image']
             results.append(res)
