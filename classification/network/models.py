@@ -146,10 +146,17 @@ def model_selection(modelname, num_out_classes, dropout=None):
             dropout=dropout or 0.0
         ), 380, True, ['image'], None
 
+    elif modelname == 'efficientnet_b4_video':
+        return TransferModel(
+            modelchoice='efficientnet_b4_video',
+            num_out_classes=num_out_classes,
+            dropout=dropout or 0.0
+        ), 380, True, ['video'], None
+
     else:
         raise NotImplementedError(
             f"Model '{modelname}' not implemented. "
-            f"Choose from: mobilenet_v3, efficientnet_b4, efficientnet_b4_cbam, efficientnet_b4_spatial"
+            f"Choose from: mobilenet_v3, efficientnet_b4, efficientnet_b4_cbam, efficientnet_b4_spatial, efficientnet_b4_video"
         )
 
 
