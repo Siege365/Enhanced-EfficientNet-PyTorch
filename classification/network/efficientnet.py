@@ -212,3 +212,90 @@ class SpatialOnlyEfficientNetB4(nn.Module):
         # Classification
         logits = self.last_linear(features)
         return logits
+
+
+class EnhancedSpatiotemporalEfficientNetB4(nn.Module):
+    """
+    Phase 3 Video Detection Architecture (TSM + MHSA).
+    
+    Combines EfficientNet-B4 spatial extraction with Temporal Shift Module (TSM)
+    and Multi-Head Self-Attention (MHSA) for deepfake video detection.
+    
+    Architecture:
+        Input (B*T, C, H, W)
+        -> EfficientNet-B4 + TSM inside MBConv blocks
+        -> (B*T, 1792, H, W)
+        -> Spatial Pool -> (B*T, 1792)
+        -> Reshape to (B, T, 1792)
+        -> MHSA (TransformerEncoder)
+        -> Temporal Pool (Average across T)
+        -> Final FC (2)
+    """
+
+    def __init__(self, num_classes=2, dropout=0.0, pretrained=True, num_frames=8):
+        super(EnhancedSpatiotemporalEfficientNetB4, self).__init__()
+        self.num_frames = num_frames
+
+        if pretrained:
+            self.backbone = EfficientNet.from_pretrained(
+                'efficientnet-b4', num_classes=1000
+            )
+        else:
+            self.backbone = EfficientNet.from_name(
+                'efficientnet-b4', num_classes=num_classes
+            )
+
+        # Inject TSM into the backbone
+        from network.attention import inject_tsm_into_efficientnet
+        inject_tsm_into_efficientnet(self, n_frame=num_frames, n_div=8)
+
+        num_ftrs = self.backbone._fc.in_features  # 1792 for B4
+        
+        self.spatial_pool = nn.AdaptiveAvgPool2d(1)
+
+        # Multi-Head Self-Attention for Temporal modeling
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=num_ftrs,
+            nhead=8,
+            dim_feedforward=2048,
+            dropout=0.1,
+            activation='relu',
+            batch_first=True
+        )
+        # Using 1 layer of MHSA is usually enough for temporal pooling without overfitting
+        self.temporal_mhsa = nn.TransformerEncoder(encoder_layer, num_layers=1)
+
+        if dropout > 0:
+            self.last_linear = nn.Sequential(
+                nn.Dropout(p=dropout),
+                nn.Linear(num_ftrs, num_classes)
+            )
+        else:
+            self.last_linear = nn.Linear(num_ftrs, num_classes)
+
+    def forward(self, x):
+        # x is expected to be shape (B*T, C, H, W) where T is self.num_frames
+        
+        # 1. Spatial + Local Temporal (EfficientNet + TSM)
+        features = self.backbone.extract_features(x)  # (B*T, 1792, H, W)
+        
+        # 2. Spatial Pooling
+        features = self.spatial_pool(features)        # (B*T, 1792, 1, 1)
+        features = features.flatten(start_dim=1)      # (B*T, 1792)
+        
+        # 3. Reshape for MHSA
+        # Note: If batch size is B, total size is B*T
+        # We need to reshape to (B, T, 1792)
+        bt, c = features.shape
+        b = bt // self.num_frames
+        features = features.view(b, self.num_frames, c)
+        
+        # 4. Global Temporal (MHSA)
+        features = self.temporal_mhsa(features)       # (B, T, 1792)
+        
+        # 5. Temporal Pooling (Average over T)
+        features = torch.mean(features, dim=1)        # (B, 1792)
+        
+        # 6. Classification
+        logits = self.last_linear(features)           # (B, num_classes)
+        return logits

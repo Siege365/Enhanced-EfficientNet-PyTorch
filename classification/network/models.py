@@ -11,7 +11,7 @@ Author: Multi-Model Comparative Study Project
 """
 import torch
 import torch.nn as nn
-from network.efficientnet import VanillaEfficientNetB4, EnhancedEfficientNetB4, SpatialOnlyEfficientNetB4
+from network.efficientnet import VanillaEfficientNetB4, EnhancedEfficientNetB4, SpatialOnlyEfficientNetB4, EnhancedSpatiotemporalEfficientNetB4
 from network.mobilenet import MobileNetV3Small
 
 
@@ -24,6 +24,7 @@ class TransferModel(nn.Module):
         - 'efficientnet_b4': Vanilla EfficientNet-B4 (proposed model)
         - 'efficientnet_b4_cbam': EfficientNet-B4 + full CBAM attention
         - 'efficientnet_b4_spatial': EfficientNet-B4 + spatial-only attention
+        - 'efficientnet_b4_video': Phase 3 TSM + MHSA Video Architecture
     """
 
     def __init__(self, modelchoice, num_out_classes=2, dropout=0.0):
@@ -58,10 +59,18 @@ class TransferModel(nn.Module):
                 pretrained=True
             )
 
+        elif modelchoice == 'efficientnet_b4_video':
+            self.model = EnhancedSpatiotemporalEfficientNetB4(
+                num_classes=num_out_classes,
+                dropout=dropout,
+                pretrained=True,
+                num_frames=8
+            )
+
         else:
             raise Exception(
                 f"Invalid model choice '{modelchoice}'. "
-                f"Choose from: mobilenet_v3, efficientnet_b4, efficientnet_b4_cbam, efficientnet_b4_spatial"
+                f"Choose from: mobilenet_v3, efficientnet_b4, efficientnet_b4_cbam, efficientnet_b4_spatial, efficientnet_b4_video"
             )
 
     def set_trainable_up_to(self, boolean, layername=None):

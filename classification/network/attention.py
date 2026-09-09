@@ -163,3 +163,58 @@ class CBAM(nn.Module):
         x = self.channel_attention(x)
         x = self.spatial_attention(x)
         return x
+
+
+class TemporalShift(nn.Module):
+    """
+    Temporal Shift Module (TSM) for zero-parameter spatio-temporal modeling.
+    
+    Shifts a portion of the channels along the temporal dimension to allow
+    2D CNNs to learn temporal dynamics and detect physics/motion inconsistencies
+    in AI-generated videos, without adding any learnable parameters.
+    """
+    def __init__(self, net, n_frame=8, n_div=8):
+        super(TemporalShift, self).__init__()
+        self.net = net
+        self.n_frame = n_frame
+        self.fold_div = n_div
+
+    def forward(self, x):
+        # x is expected to be of shape (B*T, C, H, W)
+        x = self.shift(x, self.n_frame, fold_div=self.fold_div)
+        return self.net(x)
+
+    @staticmethod
+    def shift(x, n_frame, fold_div=8):
+        nt, c, h, w = x.size()
+        n_batch = nt // n_frame
+        x = x.view(n_batch, n_frame, c, h, w)
+
+        fold = c // fold_div
+        out = torch.zeros_like(x)
+        
+        # Shift forward (first fold)
+        out[:, :-1, :fold] = x[:, 1:, :fold]
+        # Shift backward (second fold)
+        out[:, 1:, fold: 2 * fold] = x[:, :-1, fold: 2 * fold]
+        # No shift (rest)
+        out[:, :, 2 * fold:] = x[:, :, 2 * fold:]
+
+        return out.view(nt, c, h, w)
+
+def inject_tsm_into_efficientnet(model, n_frame=8, n_div=8):
+    """
+    Injects TemporalShift into the MBConv blocks of EfficientNet.
+    Wraps the depthwise convolution so temporal mixing happens before spatial mixing.
+    """
+    from efficientnet_pytorch.model import MBConvBlock
+    
+    count = 0
+    for block in model.backbone._blocks:
+        if isinstance(block, MBConvBlock):
+            # Wrap the depthwise convolution with TSM
+            block._depthwise_conv = TemporalShift(block._depthwise_conv, n_frame=n_frame, n_div=n_div)
+            count += 1
+            
+    print(f"  [TSM] Successfully injected TemporalShift into {count} MBConvBlocks.")
+    return model

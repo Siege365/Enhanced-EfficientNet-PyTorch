@@ -147,7 +147,7 @@ class FolderImageDataset(Dataset):
                         self.samples.append((os.path.join(fake_dir, fname), 1))
                         count += 1
                 if count > 0:
-                    print(f"    [{folder_name}/] → label=1 (fake): {count} images")
+                    print(f"    [{folder_name}/] -> label=1 (fake): {count} images")
 
         n_real = sum(1 for _, l in self.samples if l == 0)
         n_fake = sum(1 for _, l in self.samples if l == 1)

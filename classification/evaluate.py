@@ -44,6 +44,10 @@ def parse_args():
                    choices=['mobilenet_v3', 'efficientnet_b4', 'efficientnet_b4_cbam', 'efficientnet_b4_spatial'])
     p.add_argument('--weights', type=str, required=True,
                    help='Path to best_model.pth checkpoint')
+    p.add_argument('--weights2', type=str, default=None,
+                   help='Path to second best_model.pth checkpoint for ensemble evaluation')
+    p.add_argument('--ensemble_mode', type=str, default='max', choices=['max', 'mean'],
+                   help='Ensemble combination rule: max (default in app.py) or mean')
     p.add_argument('--data_dir', type=str, default=DEFAULT_DATA_DIR)
     p.add_argument('--data_dir_external', type=str, default=None,
                    help='Path to external test dataset (e.g. updated_data_4) to completely override internal datasets')
@@ -156,8 +160,21 @@ def run_inference(model, loader, device, args, base_transform):
         with torch.no_grad():
             for imgs, labs in tqdm(loader, desc="  Evaluating"):
                 imgs = imgs.to(device)
-                out  = model(imgs)
-                pr   = torch.softmax(out, 1)
+                if isinstance(model, tuple):
+                    m1, m2 = model
+                    out1 = m1(imgs)
+                    out2 = m2(imgs)
+                    pr1 = torch.softmax(out1, 1)
+                    pr2 = torch.softmax(out2, 1)
+                    mode = getattr(args, 'ensemble_mode', 'max')
+                    if mode == 'max':
+                        fake_prob = torch.maximum(pr1[:, 1], pr2[:, 1])
+                    else:
+                        fake_prob = (pr1[:, 1] + pr2[:, 1]) / 2.0
+                    pr = torch.stack([1.0 - fake_prob, fake_prob], dim=1)
+                else:
+                    out = model(imgs)
+                    pr = torch.softmax(out, 1)
                 preds_all.extend(pr.argmax(1).cpu().numpy())
                 labels_all.extend(labs.numpy())
                 probs_all.extend(pr[:, 1].cpu().numpy())
@@ -309,7 +326,10 @@ def main():
     # Output directory: same folder as the weights file
     weights_dir = os.path.dirname(os.path.abspath(args.weights))
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    eval_dir = os.path.join(weights_dir, f'eval_{ts}')
+    if args.weights2:
+        eval_dir = os.path.join(weights_dir, f'eval_ensemble_{args.ensemble_mode}_{ts}')
+    else:
+        eval_dir = os.path.join(weights_dir, f'eval_{ts}')
     os.makedirs(eval_dir, exist_ok=True)
     print(f"Evaluation output: {eval_dir}")
 
@@ -327,15 +347,33 @@ def main():
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False,
                               num_workers=args.num_workers, pin_memory=True)
 
-    # Load model
-    print(f"\nLoading model: {args.model}")
-    model, img_sz, *_ = model_selection(args.model, num_out_classes=2, dropout=args.dropout)
-    checkpoint = torch.load(args.weights, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model = model.to(device)
-    model.eval()
-    print(f"  Loaded weights from: {args.weights}")
-    print(f"  Trained best AUC (validation): {checkpoint.get('best_auc', 'N/A'):.4f}")
+    # Load model(s)
+    if args.weights2:
+        print(f"\nLoading Ensemble Models ({args.model.upper()}) [Mode: {args.ensemble_mode}]...")
+        m1, img_sz, *_ = model_selection(args.model, num_out_classes=2, dropout=args.dropout)
+        ckpt1 = torch.load(args.weights, map_location=device, weights_only=False)
+        m1.load_state_dict(ckpt1['model_state_dict'])
+        m1 = m1.to(device)
+        m1.eval()
+
+        m2, img_sz, *_ = model_selection(args.model, num_out_classes=2, dropout=args.dropout)
+        ckpt2 = torch.load(args.weights2, map_location=device, weights_only=False)
+        m2.load_state_dict(ckpt2['model_state_dict'])
+        m2 = m2.to(device)
+        m2.eval()
+
+        model = (m1, m2)
+        print(f"  Loaded Model 1: {args.weights}")
+        print(f"  Loaded Model 2: {args.weights2}")
+    else:
+        print(f"\nLoading model: {args.model}")
+        model, img_sz, *_ = model_selection(args.model, num_out_classes=2, dropout=args.dropout)
+        checkpoint = torch.load(args.weights, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model = model.to(device)
+        model.eval()
+        print(f"  Loaded weights from: {args.weights}")
+        print(f"  Trained best AUC (validation): {checkpoint.get('best_auc', 'N/A'):.4f}")
 
     # Run inference
     tta_note = " (TTA ×5 views)" if args.tta else ""

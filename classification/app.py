@@ -357,6 +357,7 @@ def auto_discover_models():
         'efficientnet_b4_20260723_230925': '✨ EfficientNet-B4 (Phase 2 - Joint Early)',
         'efficientnet_b4_20260903_144444': '🌟 EfficientNet-B4 (Phase 2 - Joint Enhanced - BEST)',
         'efficientnet_b4_20260904_204027': '🏆 EfficientNet-B4 (Phase 3 - 100% D1-D3 + JPEG)',
+        'efficientnet_b4_20260907_175728': '🧪 EfficientNet-B4 (Hardened Augmentation - 20260907)',
         # Hardened Joint Retraining — will appear once trained on Colab
         'efficientnet_b4_hardened': '🔥 EfficientNet-B4 (Hardened Joint - Focal Loss)',
         'mobilenet_v3_20260502_225732': '🟥 MobileNetV3-Small'

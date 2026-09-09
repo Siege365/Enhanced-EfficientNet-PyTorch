@@ -35,7 +35,8 @@ from dataset.transform import (
     mobilenet_default_data_transforms,
     mobilenet_enhanced_data_transforms
 )
-from dataset.image_dataset import create_dataset, ReplayBufferDataset
+from dataset.image_dataset import create_dataset, ReplayBufferDataset, build_datasets, build_continuous_datasets
+from dataset.video_dataset import VideoFrameSequenceDataset
 
 
 # Default data directory — E: drive datasets root
@@ -505,8 +506,18 @@ def main():
         # val_loader = val_old (for early stopping / best model tracking)
         print(f"\nContinuous Learning loaders ready.")
     else:
-        print(f"\nBuilding Phase 1 training datasets...")
-        train_ds, val_ds = build_datasets(args, tf)
+        print(f"\nBuilding Phase training datasets...")
+        if 'video' in args.model:
+            print("  -> Video mode detected. Loading VideoFrameSequenceDataset...")
+            data_dir = args.data_dir if args.data_dir else DEFAULT_DATA_DIR
+            train_ds = VideoFrameSequenceDataset(data_dir, num_frames=8, transform=tf)
+            # 85/15 train/val split for videos
+            val_len = int(len(train_ds) * args.val_split)
+            train_len = len(train_ds) - val_len
+            train_ds, val_ds = random_split(train_ds, [train_len, val_len])
+        else:
+            train_ds, val_ds = build_datasets(args, tf)
+            
         train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
                                    num_workers=args.num_workers, pin_memory=True, drop_last=True)
         val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
