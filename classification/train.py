@@ -35,7 +35,7 @@ from dataset.transform import (
     mobilenet_default_data_transforms,
     mobilenet_enhanced_data_transforms
 )
-from dataset.image_dataset import create_dataset, ReplayBufferDataset, build_datasets, build_continuous_datasets
+from dataset.image_dataset import create_dataset, ReplayBufferDataset
 from dataset.video_dataset import VideoFrameSequenceDataset
 
 
