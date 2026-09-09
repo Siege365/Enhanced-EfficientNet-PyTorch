@@ -105,7 +105,7 @@ class FocalLoss(nn.Module):
 def parse_args():
     p = argparse.ArgumentParser(description='Train Deep Learning Models for AI Image Detection')
     p.add_argument('--model', type=str, default='efficientnet_b4',
-                   choices=['mobilenet_v3', 'efficientnet_b4', 'efficientnet_b4_cbam', 'efficientnet_b4_spatial'])
+                   choices=['mobilenet_v3', 'efficientnet_b4', 'efficientnet_b4_cbam', 'efficientnet_b4_spatial', 'efficientnet_b4_video'])
     p.add_argument('--dropout', type=float, default=0.5)
     p.add_argument('--data_dir', type=str, default=DEFAULT_DATA_DIR)
     p.add_argument('--val_split', type=float, default=0.15)
