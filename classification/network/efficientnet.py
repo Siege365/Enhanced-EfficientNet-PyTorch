@@ -274,7 +274,13 @@ class EnhancedSpatiotemporalEfficientNetB4(nn.Module):
             self.last_linear = nn.Linear(num_ftrs, num_classes)
 
     def forward(self, x):
-        # x is expected to be shape (B*T, C, H, W) where T is self.num_frames
+        # x can be shape (B, T, C, H, W) from DataLoader or (B*T, C, H, W)
+        if x.dim() == 5:
+            b, t, c, h, w = x.shape
+            x = x.reshape(b * t, c, h, w)
+        else:
+            b = x.size(0) // self.num_frames
+            t = self.num_frames
         
         # 1. Spatial + Local Temporal (EfficientNet + TSM)
         features = self.backbone.extract_features(x)  # (B*T, 1792, H, W)
@@ -284,11 +290,7 @@ class EnhancedSpatiotemporalEfficientNetB4(nn.Module):
         features = features.flatten(start_dim=1)      # (B*T, 1792)
         
         # 3. Reshape for MHSA
-        # Note: If batch size is B, total size is B*T
-        # We need to reshape to (B, T, 1792)
-        bt, c = features.shape
-        b = bt // self.num_frames
-        features = features.view(b, self.num_frames, c)
+        features = features.view(b, t, -1)            # (B, T, 1792)
         
         # 4. Global Temporal (MHSA)
         features = self.temporal_mhsa(features)       # (B, T, 1792)
