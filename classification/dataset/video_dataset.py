@@ -35,7 +35,10 @@ class VideoFrameSequenceDataset(Dataset):
     """
     def __init__(self, root_dirs, num_frames=8, transform=None):
         self.num_frames = num_frames
-        self.transform = transform
+        if isinstance(transform, dict):
+            self.transform = transform.get('train', transform.get('val', None))
+        else:
+            self.transform = transform
         self.video_clips = []  # List of (folder_path, label, frame_files)
         
         if isinstance(root_dirs, str):

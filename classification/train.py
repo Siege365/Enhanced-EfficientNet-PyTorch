@@ -510,11 +510,19 @@ def main():
         if 'video' in args.model:
             print("  -> Video mode detected. Loading VideoFrameSequenceDataset...")
             data_dir = args.data_dir if args.data_dir else DEFAULT_DATA_DIR
-            train_ds = VideoFrameSequenceDataset(data_dir, num_frames=8, transform=tf)
+            train_tf = tf['train'] if isinstance(tf, dict) else tf
+            val_tf = tf['val'] if isinstance(tf, dict) else tf
+            
+            full_train_ds = VideoFrameSequenceDataset(data_dir, num_frames=8, transform=train_tf)
+            full_val_ds = VideoFrameSequenceDataset(data_dir, num_frames=8, transform=val_tf)
+
             # 85/15 train/val split for videos
-            val_len = int(len(train_ds) * args.val_split)
-            train_len = len(train_ds) - val_len
-            train_ds, val_ds = random_split(train_ds, [train_len, val_len])
+            val_len = int(len(full_train_ds) * args.val_split)
+            train_len = len(full_train_ds) - val_len
+            
+            generator = torch.Generator().manual_seed(42)
+            train_ds, _ = random_split(full_train_ds, [train_len, val_len], generator=generator)
+            _, val_ds = random_split(full_val_ds, [train_len, val_len], generator=generator)
         else:
             train_ds, val_ds = build_datasets(args, tf)
             
