@@ -34,6 +34,7 @@ from dataset.transform import (
     mobilenet_default_data_transforms
 )
 from dataset.image_dataset import create_dataset
+from dataset.video_dataset import VideoFrameSequenceDataset
 
 DEFAULT_DATA_DIR = r'E:\Thesis_Datasets\images'
 
@@ -41,7 +42,8 @@ DEFAULT_DATA_DIR = r'E:\Thesis_Datasets\images'
 def parse_args():
     p = argparse.ArgumentParser(description='Evaluate Models on unseen test set')
     p.add_argument('--model', type=str, required=True,
-                   choices=['mobilenet_v3', 'efficientnet_b4', 'efficientnet_b4_cbam', 'efficientnet_b4_spatial'])
+                   choices=['mobilenet_v3', 'efficientnet_b4', 'efficientnet_b4_cbam', 'efficientnet_b4_spatial', 'efficientnet_b4_video'])
+
     p.add_argument('--weights', type=str, required=True,
                    help='Path to best_model.pth checkpoint')
     p.add_argument('--weights2', type=str, default=None,
@@ -76,6 +78,15 @@ def build_test_datasets(args, transform):
     """
     cfgs = []
     dataset_names = []  # track names for per-dataset eval
+
+    if 'video' in args.model:
+        ext_base = args.data_dir_external if args.data_dir_external else os.path.join(args.data_dir, 'synth_vid_detect', 'test')
+        if not os.path.exists(ext_base):
+            raise ValueError(f"Video dataset path not found: {ext_base}. Please provide --data_dir_external")
+        print(f"  [VIDEO] Evaluating exclusively on: {ext_base}")
+        ds = VideoFrameSequenceDataset(ext_base, transform=transform.get('val', transform) if isinstance(transform, dict) else transform)
+        print(f"\nTest dataset: {len(ds)} total video clips")
+        return ds, [{'type': 'folder', 'path': ext_base}], [os.path.basename(ext_base)]
 
     if args.data_dir_external:
         # Evaluate ONLY on the external dataset path provided
@@ -255,7 +266,10 @@ def evaluate_per_dataset(model, device, args, cfgs, dataset_names, transform, ev
     results = {}
     for cfg, name in zip(cfgs, dataset_names):
         print(f"  -> Evaluating {name}...")
-        ds = create_dataset([cfg], split='test', transform=transform)
+        if 'video' in args.model:
+            ds = VideoFrameSequenceDataset(cfg['path'], transform=transform.get('val', transform) if isinstance(transform, dict) else transform)
+        else:
+            ds = create_dataset([cfg], split='test', transform=transform)
         loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
                             num_workers=args.num_workers, pin_memory=True)
         
@@ -375,9 +389,15 @@ def main():
         print(f"  Loaded weights from: {args.weights}")
         print(f"  Trained best AUC (validation): {checkpoint.get('best_auc', 'N/A'):.4f}")
 
+    if 'video' in args.model and args.tta:
+        print(f"\nWarning: TTA does not support Video Mode. Disabling TTA.")
+        args.tta = False
+        tta_note = ""
+
     # Run inference
     tta_note = " (TTA ×5 views)" if args.tta else ""
-    print(f"\nRunning inference on {len(test_ds)} test images{tta_note}...")
+    print(f"\nRunning inference on {len(test_ds)} test instances{tta_note}...")
+
     if args.tta:
         print("  TTA views: original | H-flip | JPEG-50 | JPEG-75 | center-crop")
     preds_all, labels_all, probs_all = run_inference(model, test_loader, device, args, transform)
