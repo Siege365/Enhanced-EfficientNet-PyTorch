@@ -147,6 +147,8 @@ conceptual_framework_v2.html
 conceptual_framework_revised.html
 thesis_gantt_chart.html
 baseline_architecture.html
+classification/dataset_scripts
+classification/slurm_scripts
 .agents/
 # Ignore large data files
 data.zip

@@ -64,6 +64,7 @@ def parse_args():
     p.add_argument('--video_dirs', nargs='+', default=DEFAULT_VIDEO_DIRS, help='Directories containing video frame sequences')
     p.add_argument('--old_video_dirs', nargs='+', default=None, help='Old video directories for replay buffer')
     p.add_argument('--pretrained_image_checkpoint', type=str, default=None, help='Path to Phase 1/2 best_model.pth')
+    p.add_argument('--architecture', type=str, default='enhanced', choices=['baseline', 'enhanced'], help='Architecture type (baseline=No TSM/MHSA, enhanced=TSM+MHSA)')
     p.add_argument('--num_frames', type=int, default=8, help='Number of frames per video sequence (T)')
     p.add_argument('--batch_size', type=int, default=2, help='Batch size (video clips per batch)')
     p.add_argument('--accum_steps', type=int, default=3, help='Gradient accumulation steps (default 3 * batch 2 = effective batch 6)')
@@ -155,7 +156,7 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scaler, use_amp, de
         inputs = inputs.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
-        with torch.amp.autocast('cuda', enabled=use_amp):
+        with autocast(enabled=use_amp):
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss_accum = loss / accum_steps
@@ -196,7 +197,7 @@ def validate(model, dataloader, criterion, use_amp, device):
         inputs = inputs.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
-        with torch.amp.autocast('cuda', enabled=use_amp):
+        with autocast(enabled=use_amp):
             outputs = model(inputs)
             loss = criterion(outputs, labels)
 
@@ -233,14 +234,22 @@ def main():
     print(f"  Device: {device} | Frames per clip (T): {args.num_frames} | Batch: {args.batch_size}")
     print(f"{'='*60}")
 
-    run_id = f"video_tsm_mhsa_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    save_dir = os.path.join(args.output_dir, run_id)
+    # If resuming, reuse the SAME output directory so console.log is appended
+    # rather than abandoned in the old directory.
+    if args.resume:
+        save_dir = args.resume
+        log_info_prefix = "Video training RESUMED"
+    else:
+        run_id = f"video_tsm_mhsa_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        save_dir = os.path.join(args.output_dir, run_id)
+        log_info_prefix = "Video training started"
     os.makedirs(save_dir, exist_ok=True)
     global CONSOLE_LOG_FILE
     CONSOLE_LOG_FILE = os.path.join(save_dir, 'console.log')
-    log_info(f"Video training started. Output directory: {save_dir}")
+    log_info(f"{log_info_prefix}. Output directory: {save_dir}")
 
     model, img_size, _ = video_model_selection(
+        architecture=args.architecture,
         num_frames=args.num_frames,
         pretrained_checkpoint=args.pretrained_image_checkpoint,
         dropout=args.dropout
@@ -261,7 +270,7 @@ def main():
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     # Use AUC as primary scheduler metric (Fix #2)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
-    scaler = torch.amp.GradScaler('cuda', enabled=not args.no_amp)
+    scaler = GradScaler(enabled=not args.no_amp)
 
     best_auc = 0.0
     patience_ctr = 0

@@ -127,6 +127,77 @@ class MHSAHead(nn.Module):
         return out
 
 
+class BaselineVideoEfficientNetB4(nn.Module):
+    """
+    Phase 3 Baseline Video Model: Vanilla EfficientNet-B4 (Spatial-only) with Mean Pooling.
+    
+    Architecture:
+      1. Backbone: Vanilla EfficientNet-B4 initialized with Phase 1/2 best image checkpoint.
+      2. No TSM: Temporal Shift Module is NOT used. Frame sequences remain independent.
+      3. No MHSA: Replaces 2D classifier with a simple temporal mean pool + Linear layer.
+    """
+    def __init__(self, num_classes=2, num_frames=8, pretrained_image_checkpoint=None, dropout=0.5):
+        super(BaselineVideoEfficientNetB4, self).__init__()
+        self.num_frames = num_frames
+        
+        vanilla = VanillaEfficientNetB4(num_classes=num_classes, dropout=0.0, pretrained=True)
+        self.backbone = vanilla.backbone
+        
+        if pretrained_image_checkpoint and os.path.exists(pretrained_image_checkpoint):
+            print(f"  [BaselineModel] Loading Phase 1/2 checkpoint: {pretrained_image_checkpoint}")
+            state_dict = torch.load(pretrained_image_checkpoint, map_location='cpu', weights_only=False)
+            if isinstance(state_dict, dict):
+                if 'model_state_dict' in state_dict:
+                    state_dict = state_dict['model_state_dict']
+                elif 'state_dict' in state_dict:
+                    state_dict = state_dict['state_dict']
+            
+            clean_state_dict = {}
+            for k, v in state_dict.items():
+                if k.startswith('model.backbone.'):
+                    clean_state_dict[k[len('model.backbone.'):]] = v
+                elif k.startswith('backbone.'):
+                    clean_state_dict[k[len('backbone.'):]] = v
+                else:
+                    clean_state_dict[k] = v
+            
+            missing, unexpected = self.backbone.load_state_dict(clean_state_dict, strict=False)
+            print(f"  [BaselineModel] Checkpoint loaded. Missing: {len(missing)} | Unexpected: {len(unexpected)}")
+        elif pretrained_image_checkpoint:
+            print(f"  [Warning] Checkpoint not found at {pretrained_image_checkpoint}. Using ImageNet weights.")
+            
+        print(f"  [BaselineModel] Standard EfficientNet-B4 (NO TSM) configuration.")
+            
+        num_ftrs = self.backbone._fc.in_features
+        self.backbone._fc = nn.Identity()
+        
+        print(f"  [BaselineModel] Attaching standard Mean Pool classifier (NO MHSA) (D={num_ftrs})...")
+        self.classifier = nn.Sequential(
+            nn.Dropout(p=dropout),
+            nn.Linear(num_ftrs, num_classes)
+        )
+
+    def forward(self, x):
+        if x.dim() == 5:
+            B, T, C, H, W = x.shape
+            x = x.view(B * T, C, H, W)
+        else:
+            B_T, C, H, W = x.shape
+            T = self.num_frames
+            B = B_T // T
+            
+        features = self.backbone.extract_features(x)
+        features = self.backbone._avg_pooling(features)
+        features = features.flatten(start_dim=1)  # (B*T, 1792)
+        
+        # Sequence average pooling across time T
+        sequence_features = features.view(B, T, -1)
+        pooled = sequence_features.mean(dim=1)  # (B, 1792)
+        
+        out = self.classifier(pooled)
+        return out
+
+
 class VideoEfficientNetB4(nn.Module):
     """
     Phase 3 Video Model: Vanilla EfficientNet-B4 + TSM + MHSA.
@@ -210,12 +281,23 @@ class VideoEfficientNetB4(nn.Module):
         return out
 
 
-def video_model_selection(modelname="efficientnet_b4_tsm_mhsa", num_out_classes=2, num_frames=8, pretrained_checkpoint=None, dropout=0.5):
+def video_model_selection(modelname="efficientnet_b4_tsm_mhsa", architecture="enhanced", num_out_classes=2, num_frames=8, pretrained_checkpoint=None, dropout=0.5):
     """
     Factory function for Phase 3 video models.
+    Supports "baseline" (Vanilla B4 + Mean Pool) and "enhanced" (B4 + TSM + MHSA).
     """
-    if modelname == "efficientnet_b4_tsm_mhsa":
+    if architecture == "enhanced":
+        print("  [Model Selection] Building ENHANCED Architecture (TSM + MHSA)")
         model = VideoEfficientNetB4(
+            num_classes=num_out_classes,
+            num_frames=num_frames,
+            pretrained_image_checkpoint=pretrained_checkpoint,
+            dropout=dropout
+        )
+        return model, 380, num_frames
+    elif architecture == "baseline":
+        print("  [Model Selection] Building BASELINE Architecture (No TSM, Mean Pooling)")
+        model = BaselineVideoEfficientNetB4(
             num_classes=num_out_classes,
             num_frames=num_frames,
             pretrained_image_checkpoint=pretrained_checkpoint,
