@@ -3,7 +3,7 @@
 > **Thesis Research Project** — Detection of AI-generated images and videos on social media using a spatiotemporal deep learning framework with Explainable AI.
 >
 > **Authors:** Merka, Nathaniel Keene M. · Mallari, Neil Ian R. · Sevellino, Kent Lenoel C.
-> **Adviser:** Ramcis N. Vilchez, DIT
+> **Adviser:** Meljohn V. Aborde, MIT
 
 ---
 
