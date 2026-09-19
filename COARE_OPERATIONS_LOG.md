@@ -212,7 +212,7 @@ Repeat this for every zip file in the table above.
 Once all zip files are uploaded to `/scratch1/your.name/datasets/thesis/`, extract them all at once:
 ```bash
 cd /scratch1/your.name/EfficientNet-PyTorch/classification
-/opt/modules/library/cpu/anaconda/3-2024.10-1/bin/python extract_datasets_coare.py
+/opt/modules/library/cpu/anaconda/3-2024.10-1/bin/python dataset_scripts/extract_datasets_coare.py
 ```
 
 **What this does:** Goes through every `.zip` file, extracts it to the `extracted/videos-zip/` folder, and **immediately deletes the zip file** to save disk space. Do not worry — your original Google Drive files are untouched.
@@ -231,9 +231,9 @@ cd /scratch1/your.name/EfficientNet-PyTorch/classification
 Run ALL three commands back to back in your **🖥️ SSH Terminal**:
 ```bash
 cd /scratch1/your.name/EfficientNet-PyTorch/classification
-sbatch download_deepaction.slurm   # AI-generated human motion videos
-sbatch download_sdfvd.slurm        # Multiple AI generator videos
-sbatch download_genvidbench.slurm  # GenVidBench benchmark (evaluation only, NOT training)
+sbatch slurm_scripts/download_deepaction.slurm   # AI-generated human motion videos
+sbatch slurm_scripts/download_sdfvd.slurm        # Multiple AI generator videos
+sbatch slurm_scripts/download_genvidbench.slurm  # GenVidBench benchmark (evaluation only, NOT training)
 ```
 
 **What you should see** after each `sbatch` command:
