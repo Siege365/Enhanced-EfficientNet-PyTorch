@@ -127,6 +127,119 @@ class MHSAHead(nn.Module):
         return out
 
 
+class ActualBaselineEfficientViT(nn.Module):
+    """
+    Actual Baseline Model from Coccomini et al. (2022) - Efficient ViT.
+    
+    Architecture:
+      1. Backbone: Vanilla EfficientNet-B4 (initialized with Phase 1/2 best checkpoint).
+      2. CNN Feature Extractor: Extracts spatial map (e.g., 12x12) instead of pooling.
+      3. Linear Projection: Projects CNN channel dim (1792) to ViT embed_dim.
+      4. ViT Encoder: Processes the flattened spatial patches + CLS token.
+      5. Frame-level Classification: CLS token used for binary classification.
+      6. Temporal Aggregation: Averages the frame-level predictions across time T.
+    """
+    def __init__(self, num_classes=2, num_frames=8, pretrained_image_checkpoint=None, dropout=0.5, embed_dim=512, num_heads=8, num_layers=4):
+        super(ActualBaselineEfficientViT, self).__init__()
+        self.num_frames = num_frames
+        
+        vanilla = VanillaEfficientNetB4(num_classes=num_classes, dropout=0.0, pretrained=True)
+        self.backbone = vanilla.backbone
+        
+        if pretrained_image_checkpoint and os.path.exists(pretrained_image_checkpoint):
+            print(f"  [ActualBaselineModel] Loading Phase 1/2 checkpoint: {pretrained_image_checkpoint}")
+            state_dict = torch.load(pretrained_image_checkpoint, map_location='cpu', weights_only=False)
+            if isinstance(state_dict, dict):
+                if 'model_state_dict' in state_dict:
+                    state_dict = state_dict['model_state_dict']
+                elif 'state_dict' in state_dict:
+                    state_dict = state_dict['state_dict']
+            
+            clean_state_dict = {}
+            for k, v in state_dict.items():
+                if k.startswith('model.backbone.'):
+                    clean_state_dict[k[len('model.backbone.'):]] = v
+                elif k.startswith('backbone.'):
+                    clean_state_dict[k[len('backbone.'):]] = v
+                else:
+                    clean_state_dict[k] = v
+            
+            missing, unexpected = self.backbone.load_state_dict(clean_state_dict, strict=False)
+            print(f"  [ActualBaselineModel] Checkpoint loaded. Missing: {len(missing)} | Unexpected: {len(unexpected)}")
+        elif pretrained_image_checkpoint:
+            print(f"  [Warning] Checkpoint not found at {pretrained_image_checkpoint}. Using ImageNet weights.")
+            
+        num_ftrs = self.backbone._fc.in_features
+        self.backbone._fc = nn.Identity()
+        
+        print(f"  [ActualBaselineModel] Attaching Spatial Vision Transformer (ViT) (embed_dim={embed_dim})...")
+        self.embed_dim = embed_dim
+        
+        # Linear projection from CNN channels to ViT embed_dim
+        self.patch_proj = nn.Linear(num_ftrs, embed_dim)
+        
+        # CLS token
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        
+        # Positional Embedding (supports up to 14x14 = 196 patches + 1 CLS = 197)
+        self.pos_embed = nn.Parameter(torch.zeros(1, 197, embed_dim))
+        
+        # ViT Encoder
+        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, dim_feedforward=embed_dim*4, dropout=dropout, activation='gelu', batch_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # Classifier
+        self.classifier = nn.Sequential(
+            nn.LayerNorm(embed_dim),
+            nn.Dropout(p=dropout),
+            nn.Linear(embed_dim, num_classes)
+        )
+        
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+
+    def forward(self, x):
+        # x: (B, T, C, H, W) or (B*T, C, H, W)
+        if x.dim() == 5:
+            B, T, C, H, W = x.shape
+            x = x.view(B * T, C, H, W)
+        else:
+            B_T, C, H, W = x.shape
+            T = self.num_frames
+            B = B_T // T
+            
+        # 1. CNN Feature Extraction (spatial map)
+        features = self.backbone.extract_features(x)  # (B*T, 1792, H', W')
+        BT, C_ftrs, H_prime, W_prime = features.shape
+        num_patches = H_prime * W_prime
+        
+        # 2. Flatten spatial dimensions and permute to (B*T, num_patches, 1792)
+        features = features.view(BT, C_ftrs, num_patches).permute(0, 2, 1)
+        
+        # 3. Linear projection to embed_dim
+        patches = self.patch_proj(features)  # (B*T, num_patches, embed_dim)
+        
+        # 4. Add CLS token
+        cls_tokens = self.cls_token.expand(BT, -1, -1)  # (B*T, 1, embed_dim)
+        x_vit = torch.cat((cls_tokens, patches), dim=1)  # (B*T, num_patches + 1, embed_dim)
+        
+        # 5. Add Positional Embedding (truncate to actual number of patches)
+        x_vit = x_vit + self.pos_embed[:, :num_patches + 1, :]
+        
+        # 6. Transformer Encoder
+        x_vit = self.transformer(x_vit)  # (B*T, num_patches + 1, embed_dim)
+        
+        # 7. Extract CLS token and classify
+        cls_out = x_vit[:, 0, :]  # (B*T, embed_dim)
+        frame_logits = self.classifier(cls_out)  # (B*T, num_classes)
+        
+        # 8. Temporal Mean Pooling across T frames
+        sequence_logits = frame_logits.view(B, T, -1)
+        out = sequence_logits.mean(dim=1)  # (B, num_classes)
+        
+        return out
+
+
 class BaselineVideoEfficientNetB4(nn.Module):
     """
     Phase 3 Baseline Video Model: Vanilla EfficientNet-B4 (Spatial-only) with Mean Pooling.
@@ -298,6 +411,15 @@ def video_model_selection(modelname="efficientnet_b4_tsm_mhsa", architecture="en
     elif architecture == "baseline":
         print("  [Model Selection] Building BASELINE Architecture (No TSM, Mean Pooling)")
         model = BaselineVideoEfficientNetB4(
+            num_classes=num_out_classes,
+            num_frames=num_frames,
+            pretrained_image_checkpoint=pretrained_checkpoint,
+            dropout=dropout
+        )
+        return model, 380, num_frames
+    elif architecture == "actual_baseline":
+        print("  [Model Selection] Building ACTUAL BASELINE Architecture (EfficientNet + Spatial ViT)")
+        model = ActualBaselineEfficientViT(
             num_classes=num_out_classes,
             num_frames=num_frames,
             pretrained_image_checkpoint=pretrained_checkpoint,

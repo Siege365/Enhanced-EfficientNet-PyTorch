@@ -61,23 +61,22 @@ DEFAULT_VIDEO_DIRS = [
 
 def parse_args():
     p = argparse.ArgumentParser(description='Train Phase 3 TSM + MHSA Video Deepfake Detector')
+    p.add_argument('--architecture', type=str, default='baseline', help='Model architecture to use (baseline, enhanced, actual_baseline)')
+    p.add_argument('--freeze_backbone_epochs', type=int, default=0, help='Number of epochs to freeze the backbone')
+    p.add_argument('--continuous', action='store_true', default=False, help='Enable continuous learning with replay buffer')
+    p.add_argument('--old_video_dirs', nargs='+', default=None, help='Directories containing old video frame sequences for replay buffer')
     p.add_argument('--video_dirs', nargs='+', default=DEFAULT_VIDEO_DIRS, help='Directories containing video frame sequences')
-    p.add_argument('--old_video_dirs', nargs='+', default=None, help='Old video directories for replay buffer')
     p.add_argument('--pretrained_image_checkpoint', type=str, default=None, help='Path to Phase 1/2 best_model.pth')
-    p.add_argument('--architecture', type=str, default='enhanced', choices=['baseline', 'enhanced'], help='Architecture type (baseline=No TSM/MHSA, enhanced=TSM+MHSA)')
     p.add_argument('--num_frames', type=int, default=8, help='Number of frames per video sequence (T)')
     p.add_argument('--batch_size', type=int, default=2, help='Batch size (video clips per batch)')
     p.add_argument('--accum_steps', type=int, default=3, help='Gradient accumulation steps (default 3 * batch 2 = effective batch 6)')
     p.add_argument('--epochs', type=int, default=15, help='Number of training epochs')
-    p.add_argument('--lr', type=float, default=0.0001, help='Learning rate')
+    p.add_argument('--lr', type=float, default=0.01, help='Learning rate')
     p.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay')
     p.add_argument('--dropout', type=float, default=0.5, help='Dropout probability')
     p.add_argument('--val_split', type=float, default=0.15, help='Validation split fraction')
     p.add_argument('--num_workers', type=int, default=4, help='DataLoader workers')
     p.add_argument('--patience', type=int, default=5, help='Early stopping patience (epochs without improvement)')
-    p.add_argument('--freeze_backbone_epochs', type=int, default=3, help='Freeze backbone for first N epochs, then unfreeze for fine-tuning')
-    p.add_argument('--continuous', action='store_true', default=False, help='Enable continual learning experience replay')
-    p.add_argument('--replay_buffer_size', type=int, default=400, help='Max video clips in replay buffer')
     p.add_argument('--output_dir', type=str, default='output_video', help='Directory to save checkpoints')
     p.add_argument('--no_amp', action='store_true', default=False, help='Disable mixed precision training')
     p.add_argument('--resume', type=str, default=None, help='Path to a previous run output directory (e.g. output_video/video_tsm_mhsa_20260716_053744) to resume training from')
@@ -267,7 +266,7 @@ def main():
 
     # Weighted loss to fix class imbalance
     criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
     # Use AUC as primary scheduler metric (Fix #2)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
     scaler = GradScaler(enabled=not args.no_amp)
@@ -304,10 +303,10 @@ def main():
     # Only apply freeze if we haven't passed the freeze window yet
     if args.freeze_backbone_epochs > 0 and start_epoch <= args.freeze_backbone_epochs:
         for name, param in model.named_parameters():
-            if 'mhsa_head' not in name:
+            if 'mhsa_head' not in name and 'classifier' not in name:
                 param.requires_grad = False
         n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        log_info(f"[Stage 1] Backbone FROZEN. Training only MHSA head ({n_trainable:,} params) for {args.freeze_backbone_epochs} epoch(s).")
+        log_info(f"[Stage 1] Backbone FROZEN. Training only head ({n_trainable:,} params) for {args.freeze_backbone_epochs} epoch(s).")
     elif start_epoch > args.freeze_backbone_epochs:
         # Already past freeze window — ensure backbone is unfrozen
         for param in model.parameters():
