@@ -49,89 +49,55 @@ ssh -i ~/.ssh/id_rsa_coare your.name@saliksik.asti.dost.gov.ph
 
 ---
 
-## PART 2 — Uploading the Code to COARE
+## PART 2 — The Magic Step (Shared Code & Datasets)
 
-> 🚨 **IMPORTANT:** Open a **NEW, SECOND PowerShell window** for this step. Do not type this in the COARE SSH terminal!
+Here is the best part: **Nathaniel has already uploaded the code and all 150GB of datasets to COARE.** He has granted your COARE accounts direct permission to read and use his files! 
 
-### Step 2.1 — Navigate to the project folder
-In your new 🪟 PowerShell window, use the `cd` command to go to the folder where you extracted the GitHub repository. For example:
-```powershell
-cd C:\Users\Kent\Documents\EfficientNet-PyTorch
-```
+You **DO NOT** need to upload any code. You **DO NOT** need to download any datasets. You just need to create "Symbolic Links" (shortcuts) that connect your account directly to Nathaniel's files.
 
-### Step 2.2 — Upload the code
-Now run this exact command to upload the `classification` folder to your COARE account (remember to change `your.name`!):
-
-```powershell
-scp -i ~/.ssh/id_rsa_coare -r classification/ your.name@saliksik.asti.dost.gov.ph:/scratch1/your.name/
-```
-
-**What you should see:** A long list of files scrolling rapidly down your screen as they upload. Wait until it completely finishes and your PowerShell cursor returns.
-
----
-
-## PART 3 — The Magic Step (Shared Datasets)
-
-Here is the best part: **Nathaniel has already downloaded, extracted, and preprocessed all 150GB of datasets for you.** He has granted your COARE accounts direct permission to read his files. 
-
-You **DO NOT** need to download any datasets. You **DO NOT** need to download any starting model weights. 
-
-### Step 3.1 — Update your script output paths
-Because you are reading Nathaniel's datasets, the scripts are currently set up to save the trained models in *Nathaniel's* folder. You don't have permission to write to his folder. 
-
-Go back to your **🖥️ SSH Terminal** (the one with the COARE logo) and run these exact commands one by one. It will automatically update all the SLURM scripts to save the trained models in YOUR folder instead of his:
+Go back to your **🖥️ SSH Terminal** (the one with the COARE logo) and run these exact commands:
 
 ```bash
-# 1. Go to your scripts folder
-cd /scratch1/your.name/classification/slurm_scripts/
+# 1. Go to your scratch folder
+cd /scratch1/your.name/
 
-# 2. Automatically replace Nathaniel's name with yours in the output paths
-# (Make sure to replace your.name with your actual username before pressing Enter!)
-sed -i 's/nathaniel.merka\/datasets/your.name/g' *.slurm
+# 2. Create the Symbolic Links pointing to Nathaniel's folders
+ln -s /scratch1/nathaniel.merka/EfficientNet-PyTorch EfficientNet-PyTorch
+ln -s /scratch1/nathaniel.merka/datasets datasets
+
+# 3. Verify they were created (you should see little arrows -> pointing to his folders)
+ls -la
 ```
 
 ---
 
-## PART 4 — Running the Training Experiments
+## PART 3 — Running the Training Experiments
 
-> 🚨 **CRITICAL: Fix Windows Line Endings First**
-> Because you uploaded these files from a Windows laptop, they contain invisible Windows line breaks that will immediately crash the Linux supercomputer. Always run this `sed` command before submitting a script!
+> 🚨 **CRITICAL: You Must Copy the Script to Your Own Folder First**
+> SLURM is very strict about security. If you try to submit a job from inside Nathaniel's folder (or from the symlink), SLURM will instantly crash the job because it refuses to write `.out` log files into a folder you don't officially own. 
 
-Go to your classification folder in your **🖥️ SSH Terminal**:
+You must create your own `my_scripts` folder, copy the script you want to run into it, and submit it from there.
+
+**Run these commands in your 🖥️ SSH Terminal:**
 ```bash
-cd /scratch1/your.name/classification
+# 1. Create a folder you officially own
+mkdir -p /scratch1/your.name/my_scripts
+
+# 2. Copy the script you want to run (e.g., Experiment 3) into your folder
+cp /scratch1/your.name/EfficientNet-PyTorch/classification/slurm_scripts/train_exp3_baseline_arch_new_data.slurm /scratch1/your.name/my_scripts/
+
+# 3. Go to your folder
+cd /scratch1/your.name/my_scripts/
+
+# 4. Submit the job
+sbatch train_exp3_baseline_arch_new_data.slurm
 ```
 
-### 🧪 Experiment 1 — Baseline Architecture on Baseline Datasets
-Vanilla EfficientNet-B4 trained on face-cropped DFDC and FaceForensics++ frames. 
-```bash
-# 1. Fix line endings
-sed -i 's/\r$//' slurm_scripts/train_exp1_baseline_arch_baseline_data.slurm
-
-# 2. Submit the job
-sbatch slurm_scripts/train_exp1_baseline_arch_baseline_data.slurm
-```
-
-### 🧪 Experiment 2 — Enhanced Architecture on Baseline Datasets
-EfficientNet-B4 + TSM + MHSA trained on face-cropped DFDC and FaceForensics++ frames.
-```bash
-sed -i 's/\r$//' slurm_scripts/train_exp2_enhanced_arch_baseline_data.slurm
-sbatch slurm_scripts/train_exp2_enhanced_arch_baseline_data.slurm
-```
-
-### 🧪 Experiment 3 — Baseline Architecture on New Datasets
-Vanilla EfficientNet-B4 trained on modern AI video datasets (Kling, Sora, CivitAI, etc.).
-```bash
-sed -i 's/\r$//' slurm_scripts/train_exp3_baseline_arch_new_data.slurm
-sbatch slurm_scripts/train_exp3_baseline_arch_new_data.slurm
-```
-
-### 🧪 Experiment 4 — Enhanced Architecture on New Datasets
-The full proposed model — EfficientNet-B4 + TSM + MHSA — trained on all modern AI video datasets. This is the flagship experiment.
-```bash
-sed -i 's/\r$//' slurm_scripts/train_exp4_enhanced_arch_new_data.slurm
-sbatch slurm_scripts/train_exp4_enhanced_arch_new_data.slurm
-```
+### 🎯 Who is Running What?
+To bypass the single-user GPU limit and speed up the thesis, we are dividing the workload across all 3 accounts simultaneously:
+- **Nathaniel (Experiment 2):** Enhanced Arch on Baseline Data
+- **Ken (Experiment 3):** Vanilla Baseline on Modern Data
+- **Neil (Experiment 4):** Enhanced Arch on Modern Data
 
 ---
 
@@ -164,13 +130,14 @@ cat exp1_548123.err
 If you see a Python `Traceback` or any line starting with `Error:`, the job crashed. Copy the error message and send it to Nathaniel.
 
 ### Watch live training progress:
-Instead of opening the file, you can watch it live as it trains:
+Instead of opening the file, you can watch it live as it trains. We recommend opening two terminals to watch both logs at the same time:
 ```bash
-tail -f exp1_548123.out
+cd /scratch1/your.name/my_scripts/
+tail -f exp1_548123.out   # Watch system logs (PyTorch installing, etc.)
+tail -f exp1_548123.err   # Watch Python console & training progress bar
+tail -f output_exp1_base_base/*/console.log  # Watch the permanent Python log file
 ```
 Press `Ctrl + C` to stop watching. The job keeps running in the background even if you disconnect!
-
----
 
 ## PART 6 — Downloading Results Back to Your Laptop
 

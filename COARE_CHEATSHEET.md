@@ -120,20 +120,16 @@ scp -i C:\Users\<YourName>\.ssh\id_rsa_coare -r your.name@saliksik.asti.dost.gov
 > **When to use:** To start training or download jobs.  
 > **Run in:** 🖥️ SSH Terminal (inside COARE)
 
-**First, always go to the classification folder:**
+**First, copy the script you want to run to your own folder:**
 ```bash
-cd /scratch1/your.name/EfficientNet-PyTorch/classification
+mkdir -p /scratch1/your.name/my_scripts
+cp /scratch1/your.name/EfficientNet-PyTorch/classification/slurm_scripts/train_exp3_baseline_arch_new_data.slurm /scratch1/your.name/my_scripts/
+cd /scratch1/your.name/my_scripts/
 ```
 
-**Fix Windows Line Endings (CRITICAL):**
-If you uploaded the script from your Windows laptop, it has invisible DOS line breaks (`\r\n`). You MUST strip them before submitting, or SLURM will crash.
+**Submit the job:**
 ```bash
-sed -i 's/\r$//' slurm_scripts/train_exp1_baseline_arch_baseline_data.slurm
-```
-
-**Submit a job:**
-```bash
-sbatch slurm_scripts/train_exp1_baseline_arch_baseline_data.slurm
+sbatch train_exp3_baseline_arch_new_data.slurm
 # You will see: Submitted batch job 548XXX
 # Write down that job number!
 ```
@@ -165,7 +161,9 @@ cat exp1_548XXX.out
 
 **Watch the output live (auto-updates, press `Ctrl+C` to stop):**
 ```bash
-tail -f exp1_548XXX.out
+tail -f exp1_548XXX.out   # Watch system logs
+tail -f exp1_548XXX.err   # Watch Python console & progress bar
+tail -f output_exp1_base_base/console.log # Watch the permanent Python log file
 ```
 
 **Check for errors:**
