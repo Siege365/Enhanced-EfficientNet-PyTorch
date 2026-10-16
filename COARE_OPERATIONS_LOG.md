@@ -139,6 +139,12 @@ tail -f output_exp1_base_base/*/console.log  # Watch the permanent Python log fi
 ```
 Press `Ctrl + C` to stop watching. The job keeps running in the background even if you disconnect!
 
+### Read the full log history:
+If you want to read the entire file from the very beginning (Epoch 1) instead of just watching the newest lines, use the `cat` command:
+```bash
+cat output_exp1_base_base/*/console.log
+```
+
 ## PART 6 — Downloading Results Back to Your Laptop
 
 After the 15-hour training finishes, you will want the trained model checkpoint on your laptop. 

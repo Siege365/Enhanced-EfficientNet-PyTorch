@@ -46,6 +46,10 @@ def parse_args():
     p.add_argument('--num_workers', type=int, default=4)
     p.add_argument('--dropout', type=float, default=0.5)
     p.add_argument('--no_youden', action='store_true', help='Disable Youden J statistic and lock threshold to 0.5')
+    p.add_argument('--output_dir', type=str, default=None, help='Override the default eval output directory')
+    p.add_argument('--include_file', type=str, default=None,
+                   help='Path to a .txt file listing specific clip folder paths to INCLUDE (one per line). '
+                        'Use this to evaluate only on held-out test clips.')
     return p.parse_args()
 
 
@@ -123,10 +127,14 @@ def main():
     else:
         print("\nNo GPU — using CPU (evaluation will be slower)")
 
-    # Output directory: same folder as the weights file
-    weights_dir = os.path.dirname(os.path.abspath(args.weights))
-    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    eval_dir = os.path.join(weights_dir, f'eval_{ts}')
+    # Output directory
+    if args.output_dir:
+        eval_dir = args.output_dir
+    else:
+        weights_dir = os.path.dirname(os.path.abspath(args.weights))
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        eval_dir = os.path.join(weights_dir, f'eval_{ts}')
+        
     os.makedirs(eval_dir, exist_ok=True)
     print(f"Evaluation output: {eval_dir}")
 
@@ -151,6 +159,22 @@ def main():
         print(f"  -> {d}")
         
     test_ds = VideoFrameSequenceDataset(args.test_dirs, num_frames=args.num_frames, transform=transform)
+    
+    # If --include_file is specified, filter to ONLY those clip folders
+    if args.include_file:
+        print(f"\n  [Include Filter] Loading held-out test clip list from: {args.include_file}")
+        with open(args.include_file, 'r') as f:
+            include_set = set(os.path.normpath(line.strip()) for line in f if line.strip())
+        before = len(test_ds)
+        test_ds.video_clips = [
+            clip for clip in test_ds.video_clips
+            if os.path.normpath(clip[0]) in include_set
+        ]
+        # Recount
+        n_real = sum(1 for _, l, _ in test_ds.video_clips if l == 0)
+        n_fake = sum(1 for _, l, _ in test_ds.video_clips if l == 1)
+        print(f"  [Include Filter] Filtered {before} -> {len(test_ds)} clips ({n_real:,} Real | {n_fake:,} Fake)")
+    
     print(f"\nTest dataset: {len(test_ds)} total video clips")
     
     use_pw = args.num_workers > 0

@@ -71,7 +71,7 @@ def parse_args():
     p.add_argument('--batch_size', type=int, default=2, help='Batch size (video clips per batch)')
     p.add_argument('--accum_steps', type=int, default=3, help='Gradient accumulation steps (default 3 * batch 2 = effective batch 6)')
     p.add_argument('--epochs', type=int, default=15, help='Number of training epochs')
-    p.add_argument('--lr', type=float, default=0.01, help='Learning rate')
+    p.add_argument('--lr', type=float, default=0.0001, help='Learning rate')
     p.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay')
     p.add_argument('--dropout', type=float, default=0.5, help='Dropout probability')
     p.add_argument('--val_split', type=float, default=0.15, help='Validation split fraction')
@@ -80,6 +80,7 @@ def parse_args():
     p.add_argument('--output_dir', type=str, default='output_video', help='Directory to save checkpoints')
     p.add_argument('--no_amp', action='store_true', default=False, help='Disable mixed precision training')
     p.add_argument('--resume', type=str, default=None, help='Path to a previous run output directory (e.g. output_video/video_tsm_mhsa_20260716_053744) to resume training from')
+    p.add_argument('--exclude_videos', type=str, default=None, help='Path to a .txt file listing video folder paths to exclude from training (used for held-out test set)')
     return p.parse_args()
 
 
@@ -101,9 +102,17 @@ def get_transforms(img_size=380):
 
 def build_datasets(args, train_tf, val_tf):
     print(f"\n[Dataset] Loading primary video dataset from {len(args.video_dirs)} directories...")
+
+    # Load excluded video folders from txt file if provided
+    exclude_dirs = None
+    if args.exclude_videos and os.path.exists(args.exclude_videos):
+        with open(args.exclude_videos, 'r') as f:
+            exclude_dirs = set(line.strip() for line in f if line.strip())
+        print(f"  [Exclude] Loaded {len(exclude_dirs):,} held-out test folders from: {args.exclude_videos}")
+
     # Build TWO separate dataset instances so train/val transforms are independent
-    train_full_ds = VideoFrameSequenceDataset(args.video_dirs, num_frames=args.num_frames, transform=train_tf)
-    val_full_ds = VideoFrameSequenceDataset(args.video_dirs, num_frames=args.num_frames, transform=val_tf)
+    train_full_ds = VideoFrameSequenceDataset(args.video_dirs, num_frames=args.num_frames, transform=train_tf, exclude_dirs=exclude_dirs)
+    val_full_ds = VideoFrameSequenceDataset(args.video_dirs, num_frames=args.num_frames, transform=val_tf, exclude_dirs=exclude_dirs)
     
     if len(train_full_ds) == 0:
         raise RuntimeError("No video frame sequences found! Check paths.")

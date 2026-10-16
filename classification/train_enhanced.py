@@ -80,6 +80,7 @@ def parse_args():
     p.add_argument('--output_dir', type=str, default='output_video', help='Directory to save checkpoints')
     p.add_argument('--no_amp', action='store_true', default=False, help='Disable mixed precision training')
     p.add_argument('--resume', type=str, default=None, help='Path to a previous run output directory (e.g. output_video/video_tsm_mhsa_20260716_053744) to resume training from')
+    p.add_argument('--exclude_videos', type=str, default=None, help='Path to a .txt file listing video folder paths to exclude from training (used for held-out test set)')
     return p.parse_args()
 
 
@@ -101,9 +102,17 @@ def get_transforms(img_size=380):
 
 def build_datasets(args, train_tf, val_tf):
     print(f"\n[Dataset] Loading primary video dataset from {len(args.video_dirs)} directories...")
+
+    # Load excluded video folders from txt file if provided
+    exclude_dirs = None
+    if args.exclude_videos and os.path.exists(args.exclude_videos):
+        with open(args.exclude_videos, 'r') as f:
+            exclude_dirs = set(line.strip() for line in f if line.strip())
+        print(f"  [Exclude] Loaded {len(exclude_dirs):,} held-out test folders from: {args.exclude_videos}")
+
     # Build TWO separate dataset instances so train/val transforms are independent
-    train_full_ds = VideoFrameSequenceDataset(args.video_dirs, num_frames=args.num_frames, transform=train_tf)
-    val_full_ds = VideoFrameSequenceDataset(args.video_dirs, num_frames=args.num_frames, transform=val_tf)
+    train_full_ds = VideoFrameSequenceDataset(args.video_dirs, num_frames=args.num_frames, transform=train_tf, exclude_dirs=exclude_dirs)
+    val_full_ds = VideoFrameSequenceDataset(args.video_dirs, num_frames=args.num_frames, transform=val_tf, exclude_dirs=exclude_dirs)
     
     if len(train_full_ds) == 0:
         raise RuntimeError("No video frame sequences found! Check paths.")
@@ -156,8 +165,17 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scaler, use_amp, de
         labels = labels.to(device, non_blocking=True)
 
         with autocast(enabled=use_amp):
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
+            outputs, aux_logits = model(inputs)
+            
+            # Labels need to be repeated for the auxiliary spatial loss (B -> B*T)
+            T = inputs.shape[1]
+            spatial_labels = labels.repeat_interleave(T)
+            
+            # Multi-Task Loss: 70% Temporal, 30% Spatial
+            temporal_loss = criterion(outputs, labels)
+            spatial_loss = criterion(aux_logits, spatial_labels)
+            loss = (0.7 * temporal_loss) + (0.3 * spatial_loss)
+            
             loss_accum = loss / accum_steps
 
         if use_amp:

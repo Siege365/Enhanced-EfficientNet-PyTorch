@@ -33,14 +33,20 @@ class VideoFrameSequenceDataset(Dataset):
       - Real (0): 'real', 'original', '0_real', 'celeb-real', 'youtube'
       - Fake (1): 'fake', 'manipulated', 'synth', 'deepfake', 'kling', 'hailuo', 'civitai', 'celeb-synthesis'
     """
-    def __init__(self, root_dirs, num_frames=8, transform=None):
+    def __init__(self, root_dirs, num_frames=8, transform=None, exclude_dirs=None):
         self.num_frames = num_frames
         if isinstance(transform, dict):
             self.transform = transform.get('train', transform.get('val', None))
         else:
             self.transform = transform
         self.video_clips = []  # List of (folder_path, label, frame_files)
-        
+
+        # Build a fast-lookup set of excluded folder paths (normalised to forward-slash)
+        self._excluded = set()
+        if exclude_dirs:
+            for p in exclude_dirs:
+                self._excluded.add(os.path.normpath(p))
+
         if isinstance(root_dirs, str):
             root_dirs = [root_dirs]
             
@@ -84,6 +90,9 @@ class VideoFrameSequenceDataset(Dataset):
                                 break
                     
                     if label is not None:
+                        # Skip folders that belong to the held-out test set
+                        if os.path.normpath(root) in self._excluded:
+                            continue
                         full_img_paths = [os.path.join(root, f) for f in img_files]
                         self.video_clips.append((root, label, full_img_paths))
 

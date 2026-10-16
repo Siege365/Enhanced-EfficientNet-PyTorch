@@ -77,29 +77,40 @@ class MHSAHead(nn.Module):
     to discover global temporal dependencies and inconsistencies across frames, pools over time,
     and classifies into real vs fake. Initialized from scratch.
     """
-    def __init__(self, in_features=1792, num_heads=8, num_classes=2, dropout=0.5):
+    def __init__(self, in_features=1792, bottleneck_dim=None, num_heads=8, num_classes=2, dropout=0.5):
         super(MHSAHead, self).__init__()
         self.in_features = in_features
+        self.bottleneck_dim = bottleneck_dim
         self.num_heads = num_heads
         
+        d_model = bottleneck_dim if bottleneck_dim is not None else in_features
+        if bottleneck_dim is not None:
+            self.bottleneck = nn.Sequential(
+                nn.Linear(in_features, bottleneck_dim),
+                nn.GELU(),
+                nn.Dropout(p=dropout)
+            )
+        else:
+            self.bottleneck = None
+        
         # Layer normalization before attention for stability
-        self.norm1 = nn.LayerNorm(in_features)
-        self.attn = nn.MultiheadAttention(embed_dim=in_features, num_heads=num_heads, dropout=0.2, batch_first=True)
-        self.norm2 = nn.LayerNorm(in_features)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=num_heads, dropout=0.2, batch_first=True)
+        self.norm2 = nn.LayerNorm(d_model)
         
         # FFN block
         self.ffn = nn.Sequential(
-            nn.Linear(in_features, in_features * 2),
+            nn.Linear(d_model, d_model * 2),
             nn.GELU(),
             nn.Dropout(p=dropout),
-            nn.Linear(in_features * 2, in_features),
+            nn.Linear(d_model * 2, d_model),
             nn.Dropout(p=dropout)
         )
         
         # Final classifier
         self.classifier = nn.Sequential(
             nn.Dropout(p=dropout),
-            nn.Linear(in_features, num_classes)
+            nn.Linear(d_model, num_classes)
         )
         
         self._init_weights()
@@ -113,6 +124,9 @@ class MHSAHead(nn.Module):
 
     def forward(self, x):
         # x shape: (B, T, D)
+        if self.bottleneck is not None:
+            x = self.bottleneck(x)
+        
         residual = x
         x_norm = self.norm1(x)
         attn_out, _ = self.attn(x_norm, x_norm, x_norm)
@@ -320,7 +334,7 @@ class VideoEfficientNetB4(nn.Module):
       2. TSM: Injected into MBConv blocks (0 params).
       3. MHSA: Replaces 2D classifier to aggregate sequence temporal features (trained from scratch).
     """
-    def __init__(self, num_classes=2, num_frames=8, pretrained_image_checkpoint=None, dropout=0.5):
+    def __init__(self, num_classes=2, num_frames=8, pretrained_image_checkpoint=None, dropout=0.5, bottleneck_dim=None):
         super(VideoEfficientNetB4, self).__init__()
         self.num_frames = num_frames
         
@@ -363,9 +377,19 @@ class VideoEfficientNetB4(nn.Module):
         num_ftrs = self.backbone._fc.in_features
         self.backbone._fc = nn.Identity()
         
-        # 3. Attach MHSA Head trained from scratch
-        print(f"  [VideoModel] Attaching Multi-Head Self-Attention (MHSA) head (D={num_ftrs})...")
-        self.mhsa_head = MHSAHead(in_features=num_ftrs, num_heads=8, num_classes=num_classes, dropout=dropout)
+        # 3. Auxiliary Spatial Classifier (For Multi-Task Loss)
+        print(f"  [VideoModel] Attaching Auxiliary Spatial Classifier (D={num_ftrs})...")
+        self.aux_classifier = nn.Sequential(
+            nn.Dropout(p=dropout),
+            nn.Linear(num_ftrs, num_classes)
+        )
+        
+        # 4. Attach MHSA Head trained from scratch (D=1792 by default, or with bottleneck)
+        if bottleneck_dim:
+            print(f"  [VideoModel] Attaching Multi-Head Self-Attention (MHSA) head (Bottleneck={bottleneck_dim})...")
+        else:
+            print(f"  [VideoModel] Attaching Multi-Head Self-Attention (MHSA) head (D={num_ftrs})...")
+        self.mhsa_head = MHSAHead(in_features=num_ftrs, bottleneck_dim=bottleneck_dim, num_heads=8, num_classes=num_classes, dropout=dropout)
 
     def forward(self, x):
         """
@@ -386,15 +410,21 @@ class VideoEfficientNetB4(nn.Module):
         features = self.backbone._avg_pooling(features)
         features = features.flatten(start_dim=1)  # (B*T, 1792)
         
+        # Get auxiliary spatial logits
+        aux_logits = self.aux_classifier(features)  # (B*T, num_classes)
+        
         # Reshape to sequence (B, T, 1792)
         sequence_features = features.view(B, T, -1)
         
         # Pass through MHSA temporal aggregation head
         out = self.mhsa_head(sequence_features)
+        
+        if self.training:
+            return out, aux_logits
         return out
 
 
-def video_model_selection(modelname="efficientnet_b4_tsm_mhsa", architecture="enhanced", num_out_classes=2, num_frames=8, pretrained_checkpoint=None, dropout=0.5):
+def video_model_selection(modelname="efficientnet_b4_tsm_mhsa", architecture="enhanced", num_out_classes=2, num_frames=8, pretrained_checkpoint=None, dropout=0.5, bottleneck_dim=None):
     """
     Factory function for Phase 3 video models.
     Supports "baseline" (Vanilla B4 + Mean Pool) and "enhanced" (B4 + TSM + MHSA).
@@ -405,7 +435,8 @@ def video_model_selection(modelname="efficientnet_b4_tsm_mhsa", architecture="en
             num_classes=num_out_classes,
             num_frames=num_frames,
             pretrained_image_checkpoint=pretrained_checkpoint,
-            dropout=dropout
+            dropout=dropout,
+            bottleneck_dim=bottleneck_dim
         )
         return model, 380, num_frames
     elif architecture == "baseline":
@@ -436,8 +467,8 @@ if __name__ == "__main__":
     B, T, C, H, W = 2, 8, 3, 380, 380
     model, img_size, frames = video_model_selection(num_frames=T)
     x = torch.randn(B, T, C, H, W)
-    out = model(x)
-    print(f"  Input sequence: {x.shape} -> Output logits: {out.shape}")
+    out, aux_out = model(x)
+    print(f"  Input sequence: {x.shape} -> Output logits: {out.shape} | Aux logits: {aux_out.shape}")
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"  Total parameters: {total_params:,} | Trainable: {trainable_params:,}")

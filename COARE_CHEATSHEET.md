@@ -149,6 +149,29 @@ scancel 548XXX   # Replace with your actual job ID
 
 ---
 
+## 🔁 Resuming Timed-Out Jobs
+> **When to use:** COARE will automatically kill jobs that hit the 72-hour limit. Use this to continue training exactly where it left off!
+
+**If your job gets killed, DO NOT run the original submit command! Run the RESUME script instead:**
+
+**Nathaniel (Exp 2):**
+```bash
+sbatch /scratch1/nathaniel.merka/EfficientNet-PyTorch/classification/slurm_scripts/resume_exp2_enhanced_arch_base_data.slurm
+```
+
+**Ken (Exp 3):**
+```bash
+sbatch /scratch1/ken.sevellino/my_scripts/resume_exp3_baseline_arch_new_data.slurm
+```
+
+**Neil (Exp 4):**
+```bash
+sbatch /scratch1/neil.mallari/my_scripts/resume_exp4_enhanced_arch_new_data.slurm
+```
+*(Note: You will need to copy the resume script to Ken/Neil's `my_scripts` folder using the `cp` commands from Section 1 before running it!)*
+
+---
+
 ## 📄 Checking Job Logs (Progress & Errors)
 
 > **When to use:** To see if a job is working, what progress it made, or why it crashed.  
@@ -163,7 +186,12 @@ cat exp1_548XXX.out
 ```bash
 tail -f exp1_548XXX.out   # Watch system logs
 tail -f exp1_548XXX.err   # Watch Python console & progress bar
-tail -f output_exp1_base_base/console.log # Watch the permanent Python log file
+tail -f output_exp1_base_base/*/console.log # Watch the permanent Python log file
+```
+
+**Read the entire history of the Python log (from the beginning):**
+```bash
+cat output_exp1_base_base/*/console.log
 ```
 
 **Check for errors:**
