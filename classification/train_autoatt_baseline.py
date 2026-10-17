@@ -141,11 +141,10 @@ class FaceDataset(torch.utils.data.Dataset):
                 if not os.path.isdir(folder):
                     print("  [WARN] Missing: {}".format(folder))
                     continue
-                for ext in self.EXT:
-                    self.samples += [
-                        (p, label)
-                        for p in glob.glob(os.path.join(folder, '*' + ext))
-                    ]
+                for root, _, files in os.walk(folder):
+                    for f in files:
+                        if f.lower().endswith(self.EXT):
+                            self.samples.append((os.path.join(root, f), label))
         n_real = sum(1 for _, l in self.samples if l == 0)
         n_fake = sum(1 for _, l in self.samples if l == 1)
         print("  [Dataset] {:,} samples -- real:{:,} fake:{:,}".format(
