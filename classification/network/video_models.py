@@ -325,6 +325,101 @@ class BaselineVideoEfficientNetB4(nn.Module):
         return out
 
 
+class AutoAttModule(nn.Module):
+    """
+    AutoAtt Module from Jain et al. (IJISAE 2024).
+    Applied at Stage 3 output (28x28x56 for 224x224 input):
+    Conv2d(56, 56, k=1) -> Sigmoid -> Element-wise multiply.
+    """
+    def __init__(self, channels=56):
+        super(AutoAttModule, self).__init__()
+        self.attn = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=1, bias=True),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return x * self.attn(x)
+
+
+class EfficientNetAutoAttB4(nn.Module):
+    """
+    EfficientNetAutoAttB4 baseline architecture from Jain et al. (IJISAE 2024).
+    Stem -> Stages 1-3 -> AutoAtt (28x28x56) -> Stages 4-7 -> Head.
+    """
+    STAGE3_END = 10   # _blocks[:10] = stages 1-3, output is 28x28x56 for 224x224 input
+    STAGE3_CH  = 56
+
+    def __init__(self, num_classes=2, dropout=0.4, pretrained=True):
+        super(EfficientNetAutoAttB4, self).__init__()
+        try:
+            from efficientnet_pytorch import EfficientNet
+        except ImportError:
+            raise ImportError("Install with: pip install efficientnet_pytorch")
+
+        if pretrained:
+            base = EfficientNet.from_pretrained('efficientnet-b4')
+        else:
+            base = EfficientNet.from_name('efficientnet-b4')
+
+        self._conv_stem = base._conv_stem
+        self._bn0       = base._bn0
+        self._swish     = base._swish
+
+        n = self.STAGE3_END
+        self._blocks_pre  = nn.ModuleList(base._blocks[:n])   # stages 1-3
+        self._blocks_post = nn.ModuleList(base._blocks[n:])   # stages 4-7
+
+        self._conv_head   = base._conv_head
+        self._bn1         = base._bn1
+        self._avg_pooling = base._avg_pooling
+
+        self.auto_att = AutoAttModule(channels=self.STAGE3_CH)
+        self._dropout = nn.Dropout(p=dropout)
+        self._fc      = nn.Linear(base._fc.in_features, num_classes)
+
+    def forward(self, x):
+        x = self._swish(self._bn0(self._conv_stem(x)))
+        for blk in self._blocks_pre:
+            x = blk(x, drop_connect_rate=0.0)
+        x = self.auto_att(x)
+        for blk in self._blocks_post:
+            x = blk(x, drop_connect_rate=0.0)
+        x = self._swish(self._bn1(self._conv_head(x)))
+        x = self._avg_pooling(x).flatten(1)
+        x = self._dropout(x)
+        return self._fc(x)
+
+
+class AutoAttVideoEfficientNetB4(nn.Module):
+    """
+    Video sequence wrapper for Jain et al. (2024) EfficientNetAutoAttB4 baseline.
+    Evaluates each frame in sequence with AutoAtt and temporal mean pools logits across T.
+    """
+    def __init__(self, num_classes=2, num_frames=8, pretrained_checkpoint=None, dropout=0.4):
+        super(AutoAttVideoEfficientNetB4, self).__init__()
+        self.num_frames = num_frames
+        self.model = EfficientNetAutoAttB4(num_classes=num_classes, dropout=dropout, pretrained=(pretrained_checkpoint is None))
+        if pretrained_checkpoint and os.path.exists(pretrained_checkpoint):
+            ckpt = torch.load(pretrained_checkpoint, map_location='cpu', weights_only=False)
+            state_dict = ckpt['model_state'] if 'model_state' in ckpt else ckpt.get('model_state_dict', ckpt)
+            self.model.load_state_dict(state_dict)
+            print(f"  [AutoAttVideo] Loaded checkpoint: {pretrained_checkpoint}")
+
+    def forward(self, x):
+        if x.dim() == 5:
+            B, T, C, H, W = x.shape
+            x = x.view(B * T, C, H, W)
+        else:
+            B_T, C, H, W = x.shape
+            T = self.num_frames
+            B = B_T // T
+
+        frame_logits = self.model(x)  # (B*T, num_classes)
+        seq_logits = frame_logits.view(B, T, -1)
+        out = seq_logits.mean(dim=1)  # (B, num_classes)
+        return out
+
 class VideoEfficientNetB4(nn.Module):
     """
     Phase 3 Video Model: Vanilla EfficientNet-B4 + TSM + MHSA.
@@ -334,7 +429,7 @@ class VideoEfficientNetB4(nn.Module):
       2. TSM: Injected into MBConv blocks (0 params).
       3. MHSA: Replaces 2D classifier to aggregate sequence temporal features (trained from scratch).
     """
-    def __init__(self, num_classes=2, num_frames=8, pretrained_image_checkpoint=None, dropout=0.5, bottleneck_dim=None):
+    def __init__(self, num_classes=2, num_frames=8, pretrained_image_checkpoint=None, dropout=0.5, bottleneck_dim=256):
         super(VideoEfficientNetB4, self).__init__()
         self.num_frames = num_frames
         
@@ -424,7 +519,7 @@ class VideoEfficientNetB4(nn.Module):
         return out
 
 
-def video_model_selection(modelname="efficientnet_b4_tsm_mhsa", architecture="enhanced", num_out_classes=2, num_frames=8, pretrained_checkpoint=None, dropout=0.5, bottleneck_dim=None):
+def video_model_selection(modelname="efficientnet_b4_tsm_mhsa", architecture="enhanced", num_out_classes=2, num_frames=8, pretrained_checkpoint=None, dropout=0.5, bottleneck_dim=256):
     """
     Factory function for Phase 3 video models.
     Supports "baseline" (Vanilla B4 + Mean Pool) and "enhanced" (B4 + TSM + MHSA).
@@ -436,9 +531,18 @@ def video_model_selection(modelname="efficientnet_b4_tsm_mhsa", architecture="en
             num_frames=num_frames,
             pretrained_image_checkpoint=pretrained_checkpoint,
             dropout=dropout,
-            bottleneck_dim=bottleneck_dim
+            bottleneck_dim=bottleneck_dim or 256
         )
-        return model, 380, num_frames
+        return model, 224, num_frames
+    elif architecture in ("autoatt_baseline", "jain_baseline"):
+        print("  [Model Selection] Building JAIN ET AL. (2024) BASELINE (AutoAtt B4 + Mean Pooling)")
+        model = AutoAttVideoEfficientNetB4(
+            num_classes=num_out_classes,
+            num_frames=num_frames,
+            pretrained_checkpoint=pretrained_checkpoint,
+            dropout=dropout
+        )
+        return model, 224, num_frames
     elif architecture == "baseline":
         print("  [Model Selection] Building BASELINE Architecture (No TSM, Mean Pooling)")
         model = BaselineVideoEfficientNetB4(

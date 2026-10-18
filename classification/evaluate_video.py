@@ -35,13 +35,15 @@ from dataset.video_dataset import VideoFrameSequenceDataset
 def parse_args():
     p = argparse.ArgumentParser(description='Evaluate Video Models on unseen test sets')
     p.add_argument('--architecture', type=str, required=True,
-                   choices=['baseline', 'enhanced', 'actual_baseline'],
+                   choices=['baseline', 'enhanced', 'autoatt_baseline', 'actual_baseline'],
                    help='Model architecture to evaluate')
     p.add_argument('--weights', type=str, required=True,
                    help='Path to best_video_model.pth checkpoint')
     p.add_argument('--test_dirs', nargs='+', required=True,
                    help='Directories containing the test video frame sequences')
     p.add_argument('--num_frames', type=int, default=8, help='Number of frames per video sequence (T)')
+    p.add_argument('--img_size', type=int, default=224, help='Input frame resolution (default: 224)')
+    p.add_argument('--bottleneck_dim', type=int, default=256, help='MHSA head bottleneck dim (default: 256)')
     p.add_argument('--batch_size', type=int, default=4)
     p.add_argument('--num_workers', type=int, default=4)
     p.add_argument('--dropout', type=float, default=0.5)
@@ -53,11 +55,11 @@ def parse_args():
     return p.parse_args()
 
 
-def get_val_transform(img_size=380):
+def get_val_transform(img_size=224):
     return transforms.Compose([
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
-        transforms.Normalize([0.5] * 3, [0.5] * 3)
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
 
 
@@ -142,17 +144,23 @@ def main():
     model, img_sz, _ = video_model_selection(
         architecture=args.architecture,
         num_frames=args.num_frames,
-        pretrained_checkpoint=None,  # We load the entire state dict below anyway
-        dropout=args.dropout
+        pretrained_checkpoint=None,
+        dropout=args.dropout,
+        bottleneck_dim=args.bottleneck_dim
     )
     
     print(f"  Loading weights from: {args.weights}")
     checkpoint = torch.load(args.weights, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    state_dict = checkpoint.get('model_state_dict', checkpoint.get('model_state', checkpoint))
+    if hasattr(model, 'model') and any(k.startswith('auto_att.') or k.startswith('_blocks_') for k in state_dict.keys()):
+        # AutoAtt baseline weights from train_autoatt_baseline.py
+        model.model.load_state_dict(state_dict)
+    else:
+        model.load_state_dict(state_dict)
     model = model.to(device)
     model.eval()
     
-    transform = get_val_transform(img_size=img_sz)
+    transform = get_val_transform(img_size=args.img_size or img_sz)
     
     print(f"\nLoading UNSEEN test video data from {len(args.test_dirs)} directories...")
     for d in args.test_dirs:

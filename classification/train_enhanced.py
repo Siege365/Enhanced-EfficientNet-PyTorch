@@ -65,8 +65,10 @@ def parse_args():
     p.add_argument('--old_video_dirs', nargs='+', default=None, help='Old video directories for replay buffer')
     p.add_argument('--pretrained_image_checkpoint', type=str, default=None, help='Path to Phase 1/2 best_model.pth')
     p.add_argument('--num_frames', type=int, default=8, help='Number of frames per video sequence (T)')
-    p.add_argument('--batch_size', type=int, default=2, help='Batch size (video clips per batch)')
-    p.add_argument('--accum_steps', type=int, default=3, help='Gradient accumulation steps (default 3 * batch 2 = effective batch 6)')
+    p.add_argument('--img_size', type=int, default=224, help='Input frame resolution (default: 224 to match Jain et al. 2024)')
+    p.add_argument('--bottleneck_dim', type=int, default=256, help='MHSA head bottleneck dimension (default: 256)')
+    p.add_argument('--batch_size', type=int, default=4, help='Batch size (video clips per batch)')
+    p.add_argument('--accum_steps', type=int, default=2, help='Gradient accumulation steps (default 2 * batch 4 = effective batch 8)')
     p.add_argument('--epochs', type=int, default=15, help='Number of training epochs')
     p.add_argument('--lr', type=float, default=0.0001, help='Learning rate')
     p.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay')
@@ -74,7 +76,7 @@ def parse_args():
     p.add_argument('--val_split', type=float, default=0.15, help='Validation split fraction')
     p.add_argument('--num_workers', type=int, default=4, help='DataLoader workers')
     p.add_argument('--patience', type=int, default=5, help='Early stopping patience (epochs without improvement)')
-    p.add_argument('--freeze_backbone_epochs', type=int, default=3, help='Freeze backbone for first N epochs, then unfreeze for fine-tuning')
+    p.add_argument('--freeze_backbone_epochs', type=int, default=0, help='Freeze backbone for first N epochs (default: 0 for end-to-end training matching Jain et al.)')
     p.add_argument('--continuous', action='store_true', default=False, help='Enable continual learning experience replay')
     p.add_argument('--replay_buffer_size', type=int, default=400, help='Max video clips in replay buffer')
     p.add_argument('--output_dir', type=str, default='output_video', help='Directory to save checkpoints')
@@ -84,18 +86,18 @@ def parse_args():
     return p.parse_args()
 
 
-def get_transforms(img_size=380):
+def get_transforms(img_size=224):
     train_transform = transforms.Compose([
         transforms.Resize((img_size, img_size)),
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ColorJitter(brightness=0.1, contrast=0.1),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
         transforms.ToTensor(),
-        transforms.Normalize([0.5] * 3, [0.5] * 3)
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
     val_transform = transforms.Compose([
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
-        transforms.Normalize([0.5] * 3, [0.5] * 3)
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
     return train_transform, val_transform
 
@@ -111,8 +113,9 @@ def build_datasets(args, train_tf, val_tf):
         print(f"  [Exclude] Loaded {len(exclude_dirs):,} held-out test folders from: {args.exclude_videos}")
 
     # Build TWO separate dataset instances so train/val transforms are independent
-    train_full_ds = VideoFrameSequenceDataset(args.video_dirs, num_frames=args.num_frames, transform=train_tf, exclude_dirs=exclude_dirs)
-    val_full_ds = VideoFrameSequenceDataset(args.video_dirs, num_frames=args.num_frames, transform=val_tf, exclude_dirs=exclude_dirs)
+    ds_kwargs = {'exclude_dirs': exclude_dirs} if exclude_dirs is not None else {}
+    train_full_ds = VideoFrameSequenceDataset(args.video_dirs, num_frames=args.num_frames, transform=train_tf, **ds_kwargs)
+    val_full_ds = VideoFrameSequenceDataset(args.video_dirs, num_frames=args.num_frames, transform=val_tf, **ds_kwargs)
     
     if len(train_full_ds) == 0:
         raise RuntimeError("No video frame sequences found! Check paths.")
@@ -266,15 +269,17 @@ def main():
     CONSOLE_LOG_FILE = os.path.join(save_dir, 'console.log')
     log_info(f"{log_info_prefix}. Output directory: {save_dir}")
 
-    model, img_size, _ = video_model_selection(
+    model, img_size_model, _ = video_model_selection(
         architecture=args.architecture,
         num_frames=args.num_frames,
         pretrained_checkpoint=args.pretrained_image_checkpoint,
-        dropout=args.dropout
+        dropout=args.dropout,
+        bottleneck_dim=args.bottleneck_dim
     )
     model = model.to(device)
 
-    train_tf, val_tf = get_transforms(img_size=img_size)
+    actual_img_size = args.img_size if args.img_size else img_size_model
+    train_tf, val_tf = get_transforms(img_size=actual_img_size)
     train_ds, val_ds, class_weights, sample_weights = build_datasets(args, train_tf, val_tf)
 
     # WeightedRandomSampler: balanced mini-batches (Fix #3)
@@ -283,8 +288,9 @@ def main():
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, sampler=sampler, num_workers=args.num_workers, pin_memory=True, persistent_workers=use_pw, prefetch_factor=2 if use_pw else None)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True, persistent_workers=use_pw, prefetch_factor=2 if use_pw else None)
 
-    # Weighted loss to fix class imbalance
-    criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
+    # Unweighted CrossEntropyLoss: mini-batches are already balanced 50:50 by WeightedRandomSampler.
+    # Removing redundant class weights prevents artificial over-penalization of Real samples.
+    criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     # Use AUC as primary scheduler metric (Fix #2)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
@@ -339,11 +345,11 @@ def main():
         if args.freeze_backbone_epochs > 0 and epoch == args.freeze_backbone_epochs + 1:
             for param in model.parameters():
                 param.requires_grad = True
-            # Reduce LR for fine-tuning to not overwrite learned temporal features
+            # Fine-tuning learning rate (mild 2x step, avoiding severe 10x drop)
             for pg in optimizer.param_groups:
-                pg['lr'] = args.lr * 0.1
+                pg['lr'] = args.lr * 0.5
             n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            log_info(f"[Stage 2] Backbone UNFROZEN. Fine-tuning all {n_trainable:,} params with LR={args.lr*0.1:.2e}")
+            log_info(f"[Stage 2] Backbone UNFROZEN. Fine-tuning all {n_trainable:,} params with LR={args.lr*0.5:.2e}")
 
         t0 = time.time()
         train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, scaler, not args.no_amp, device, accum_steps=args.accum_steps)
