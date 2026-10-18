@@ -169,15 +169,7 @@ class ActualBaselineEfficientViT(nn.Module):
                 elif 'state_dict' in state_dict:
                     state_dict = state_dict['state_dict']
             
-            clean_state_dict = {}
-            for k, v in state_dict.items():
-                if k.startswith('model.backbone.'):
-                    clean_state_dict[k[len('model.backbone.'):]] = v
-                elif k.startswith('backbone.'):
-                    clean_state_dict[k[len('backbone.'):]] = v
-                else:
-                    clean_state_dict[k] = v
-            
+            clean_state_dict = remap_checkpoint_to_backbone(state_dict)
             missing, unexpected = self.backbone.load_state_dict(clean_state_dict, strict=False)
             print(f"  [ActualBaselineModel] Checkpoint loaded. Missing: {len(missing)} | Unexpected: {len(unexpected)}")
         elif pretrained_image_checkpoint:
@@ -254,6 +246,43 @@ class ActualBaselineEfficientViT(nn.Module):
         return out
 
 
+def remap_checkpoint_to_backbone(state_dict):
+    """
+    Remaps keys from various checkpoint formats to standard EfficientNet backbone keys.
+    Handles:
+      - TransferModel wrappers ('model.backbone.' or 'backbone.' or 'model.')
+      - Jain et al. (2024) AutoAtt checkpoints ('_blocks_pre.0..9' and '_blocks_post.0..21')
+    """
+    if isinstance(state_dict, dict):
+        if 'model_state_dict' in state_dict:
+            state_dict = state_dict['model_state_dict']
+        elif 'model_state' in state_dict:
+            state_dict = state_dict['model_state']
+        elif 'state_dict' in state_dict:
+            state_dict = state_dict['state_dict']
+
+    clean = {}
+    for k, v in state_dict.items():
+        if k.startswith('model.backbone.'):
+            k = k[len('model.backbone.'):]
+        elif k.startswith('backbone.'):
+            k = k[len('backbone.'):]
+        elif k.startswith('model.'):
+            k = k[len('model.'):]
+
+        # Remap Jain et al. EfficientNetAutoAttB4 blocks -> standard EfficientNet _blocks
+        if k.startswith('_blocks_pre.'):
+            k = '_blocks.' + k[len('_blocks_pre.'):]
+        elif k.startswith('_blocks_post.'):
+            parts = k.split('.', 2)
+            idx = int(parts[1]) + 10  # STAGE3_END = 10
+            rest = parts[2] if len(parts) > 2 else ''
+            k = f'_blocks.{idx}.{rest}' if rest else f'_blocks.{idx}'
+
+        clean[k] = v
+    return clean
+
+
 class BaselineVideoEfficientNetB4(nn.Module):
     """
     Phase 3 Baseline Video Model: Vanilla EfficientNet-B4 (Spatial-only) with Mean Pooling.
@@ -279,15 +308,7 @@ class BaselineVideoEfficientNetB4(nn.Module):
                 elif 'state_dict' in state_dict:
                     state_dict = state_dict['state_dict']
             
-            clean_state_dict = {}
-            for k, v in state_dict.items():
-                if k.startswith('model.backbone.'):
-                    clean_state_dict[k[len('model.backbone.'):]] = v
-                elif k.startswith('backbone.'):
-                    clean_state_dict[k[len('backbone.'):]] = v
-                else:
-                    clean_state_dict[k] = v
-            
+            clean_state_dict = remap_checkpoint_to_backbone(state_dict)
             missing, unexpected = self.backbone.load_state_dict(clean_state_dict, strict=False)
             print(f"  [BaselineModel] Checkpoint loaded. Missing: {len(missing)} | Unexpected: {len(unexpected)}")
         elif pretrained_image_checkpoint:
@@ -449,15 +470,7 @@ class VideoEfficientNetB4(nn.Module):
                     state_dict = state_dict['state_dict']
             
             # Strip 'model.backbone.' or 'backbone.' prefix if present from TransferModel wrapper
-            clean_state_dict = {}
-            for k, v in state_dict.items():
-                if k.startswith('model.backbone.'):
-                    clean_state_dict[k[len('model.backbone.'):]] = v
-                elif k.startswith('backbone.'):
-                    clean_state_dict[k[len('backbone.'):]] = v
-                else:
-                    clean_state_dict[k] = v
-            
+            clean_state_dict = remap_checkpoint_to_backbone(state_dict)
             missing, unexpected = self.backbone.load_state_dict(clean_state_dict, strict=False)
             print(f"  [VideoModel] Checkpoint loaded. Missing: {len(missing)} | Unexpected: {len(unexpected)}")
         elif pretrained_image_checkpoint:

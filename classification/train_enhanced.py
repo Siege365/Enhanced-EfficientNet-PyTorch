@@ -168,16 +168,19 @@ def train_one_epoch(model, dataloader, criterion, optimizer, scaler, use_amp, de
         labels = labels.to(device, non_blocking=True)
 
         with autocast(enabled=use_amp):
-            outputs, aux_logits = model(inputs)
-            
-            # Labels need to be repeated for the auxiliary spatial loss (B -> B*T)
-            T = inputs.shape[1]
-            spatial_labels = labels.repeat_interleave(T)
-            
-            # Multi-Task Loss: 70% Temporal, 30% Spatial
-            temporal_loss = criterion(outputs, labels)
-            spatial_loss = criterion(aux_logits, spatial_labels)
-            loss = (0.7 * temporal_loss) + (0.3 * spatial_loss)
+            model_out = model(inputs)
+            if isinstance(model_out, tuple):
+                outputs, aux_logits = model_out
+                # Labels need to be repeated for the auxiliary spatial loss (B -> B*T)
+                T = inputs.shape[1]
+                spatial_labels = labels.repeat_interleave(T)
+                # Multi-Task Loss: 70% Temporal, 30% Spatial
+                temporal_loss = criterion(outputs, labels)
+                spatial_loss = criterion(aux_logits, spatial_labels)
+                loss = (0.7 * temporal_loss) + (0.3 * spatial_loss)
+            else:
+                outputs = model_out
+                loss = criterion(outputs, labels)
             
             loss_accum = loss / accum_steps
 
